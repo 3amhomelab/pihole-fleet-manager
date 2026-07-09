@@ -572,7 +572,7 @@ def run_diagnostics(ip: str) -> tuple:
     if ip == PIHOLE_VIP or ip not in PIHOLE_IPS:
         return False, "Invalid target"
     try:
-        r = _ssh_cmd(ip, "sudo /etc/keepalived/collect-diag.sh manual", timeout=60)
+        r = _ssh_cmd(ip, "sudo /etc/keepalived/collect-diag.sh manual", timeout=120)
         output = (r.stdout + r.stderr).strip()
         if r.returncode != 0:
             return False, output[-150:] or f"exit {r.returncode}"
