@@ -220,8 +220,8 @@ function renderVlans() {
           <div class="meta-item"><span class="meta-label">Range</span><span class="meta-value">${esc(v.range_start)} – ${esc(v.range_end)}</span></div>
           <div class="meta-item"><span class="meta-label">Netmask</span><span class="meta-value">${esc(netmaskOf(v))}</span></div>
           <div class="meta-item"><span class="meta-label">Lease</span><span class="meta-value">${esc(v.lease_time)}</span></div>
-          ${!isPrimary ? `<div class="meta-item"><span class="meta-label">Cond. Forward</span><span class="meta-value" id="cf-${v.id}" onclick="startEditCf('${v.id}','${esc(v.cf_domain||'')}')" title="Click to edit" style="cursor:pointer">${esc(v.cf_domain) || '<span style=\\'color:var(--muted)\\'>none — click to set</span>'}</span></div>` : ''}
-          ${!isPrimary ? `<div class="meta-item"><span class="meta-label">Pi-hole Group</span><span class="meta-value" id="grp-${v.id}" onclick="startEditGroup('${v.id}','${esc(v.group_name||'')}')" title="Click to edit" style="cursor:pointer">${esc(v.group_name) || '<span style=\\'color:var(--muted)\\'>none — click to set</span>'}</span></div>` : ''}
+          ${!isPrimary ? `<div class="meta-item"><span class="meta-label">Cond. Forward</span><span class="meta-value" id="cf-${v.id}" onclick="startEditCf('${v.id}','${esc(v.cf_domain||'')}')" title="Click to edit" style="cursor:pointer">${esc(v.cf_domain) || '<span style=\'color:var(--muted)\'>none — click to set</span>'}</span></div>` : ''}
+          ${!isPrimary ? `<div class="meta-item"><span class="meta-label">Pi-hole Group</span><span class="meta-value" id="grp-${v.id}" onclick="startEditGroup('${v.id}','${esc(v.group_name||'')}')" title="Click to edit" style="cursor:pointer">${esc(v.group_name) || '<span style=\'color:var(--muted)\'>none — click to set</span>'}</span></div>` : ''}
         </div>
         <table>
           <thead><tr>

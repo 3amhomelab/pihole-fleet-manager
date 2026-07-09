@@ -58,39 +58,47 @@ def netmask_of(vlan: dict) -> str:
     return str(network_of(vlan).netmask)
 
 
+def primary_vlan_from_config(pihole_config: dict) -> dict | None:
+    """Builds the 'primary' VLAN dict (metadata only, no side effects) from a
+    live Pi-hole /config/dhcp response. Shared by ensure_primary_vlan (which
+    persists it) and the node-scan preview (which just wants to show it)."""
+    if not pihole_config or not pihole_config.get("start"):
+        return None
+    try:
+        net = ipaddress.ip_network(
+            f"{pihole_config['start']}/{pihole_config.get('netmask', '255.255.255.0')}", strict=False)
+    except ValueError:
+        return None
+
+    return {
+        "id": "primary",
+        "name": "Primary (existing Pi-hole scope)",
+        "vlan_tag": None,
+        "is_primary": True,
+        "subnet": str(net.network_address),
+        "prefix": net.prefixlen,
+        "gateway": pihole_config.get("router", ""),
+        "range_start": pihole_config.get("start", ""),
+        "range_end": pihole_config.get("end", ""),
+        "lease_time": f"{pihole_config.get('leaseTime', '24')}h" if str(pihole_config.get("leaseTime", "")).isdigit() else str(pihole_config.get("leaseTime") or "24h"),
+        "hosts": [],
+    }
+
+
 def ensure_primary_vlan(pihole_config: dict) -> dict | None:
     """On first connect, mirror Pi-hole's own existing DHCP scope into the store
     as a reference VLAN (id='primary'), so it shows up in the VLANs list. Its
     `hosts` are always computed fresh from Pi-hole at request time (see
     merge_dynamic_hosts below) rather than persisted here — this just seeds the
     metadata (subnet/gateway/range). No-op if it already exists."""
-    if not pihole_config or not pihole_config.get("start"):
+    vlan = primary_vlan_from_config(pihole_config)
+    if vlan is None:
         return None
 
     with _lock:
         data = _load()
         if any(v.get("id") == "primary" for v in data["vlans"]):
             return None
-
-        try:
-            net = ipaddress.ip_network(
-                f"{pihole_config['start']}/{pihole_config.get('netmask', '255.255.255.0')}", strict=False)
-        except ValueError:
-            return None
-
-        vlan = {
-            "id": "primary",
-            "name": "Primary (existing Pi-hole scope)",
-            "vlan_tag": None,
-            "is_primary": True,
-            "subnet": str(net.network_address),
-            "prefix": net.prefixlen,
-            "gateway": pihole_config.get("router", ""),
-            "range_start": pihole_config.get("start", ""),
-            "range_end": pihole_config.get("end", ""),
-            "lease_time": f"{pihole_config.get('leaseTime', '24')}h" if str(pihole_config.get("leaseTime", "")).isdigit() else str(pihole_config.get("leaseTime") or "24h"),
-            "hosts": [],
-        }
         data["vlans"].insert(0, vlan)
         _save(data)
         return vlan

@@ -78,10 +78,11 @@ def _api_patch(ip, path, body):
 
 # --- Reservation CRUD (writes to the primary node only) ---
 
-def get_config() -> dict:
-    if not PIHOLE_API_HOST:
+def get_config(ip: str = None) -> dict:
+    ip = ip or PIHOLE_API_HOST
+    if not ip:
         return {}
-    data = _api_get(PIHOLE_API_HOST, "/config/dhcp")
+    data = _api_get(ip, "/config/dhcp")
     return (data or {}).get("config", {}).get("dhcp", {})
 
 
@@ -98,10 +99,10 @@ def get_leases() -> list:
     return list(merged.values())
 
 
-def get_reservations() -> list:
+def get_reservations(ip: str = None) -> list:
     """Current primary-scope reservations as {mac, ip, hostname} dicts."""
     parsed = []
-    for h in get_config().get("hosts", []):
+    for h in get_config(ip).get("hosts", []):
         parts = h.split(",")
         if len(parts) >= 2 and parts[1].strip():
             parsed.append({

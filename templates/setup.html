@@ -45,6 +45,7 @@
 
 /* Import existing scopes */
 .push-row { display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap; }
+.push-row select { background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 12px;font-size:13px; }
 .preview-btn { background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:8px 14px;font-size:13px;cursor:pointer; }
 .preview-btn:hover { border-color:var(--blue);color:var(--blue); }
 .host-status { font-size:11px;margin-left:4px; }
@@ -106,9 +107,12 @@
     <p class="hint" style="margin-bottom:16px">
       Reads back whatever's already deployed at <code>/etc/dnsmasq.d/</code> on a node —
       useful for picking up VLANs pushed there by another instance (e.g. before a
-      migration) that aren't in this instance's local store yet.
+      migration) that aren't in this instance's local store yet — plus the node's own
+      standard Pi-hole scope and its static DHCP reservations, for a full picture of
+      what's already configured there.
     </p>
     <div class="push-row">
+      <select id="import-node"></select>
       <button class="preview-btn" onclick="scanImport()">Scan a node for existing scopes</button>
       <span class="host-status" id="import-status"></span>
     </div>
@@ -144,6 +148,8 @@ async function loadNodeStatus() {
       <span class="node-ip">${n.ip}</span>
       <span class="node-badge ${n.key_auth_ok ? 'ok' : 'fail'}">${n.key_auth_ok ? 'Key auth OK' : 'No key trust'}</span>
     </div>`).join('') || '<p class="hint">No Pi-hole nodes configured (PIHOLE_IPS is empty).</p>';
+  document.getElementById('import-node').innerHTML =
+    (d.nodes || []).map(n => `<option value="${n.ip}">${n.ip}</option>`).join('');
   return d;
 }
 
@@ -213,11 +219,12 @@ function copyKey() {
 let importCandidates = [];
 
 async function scanImport() {
+  const ip = document.getElementById('import-node').value;
   const stEl = document.getElementById('import-status');
   stEl.className = 'host-status'; stEl.textContent = 'Scanning…';
   document.getElementById('import-list').innerHTML = '';
   try {
-    const r = await fetch('/api/vlans/import/preview');
+    const r = await fetch('/api/vlans/import/preview' + (ip ? `?ip=${encodeURIComponent(ip)}` : ''));
     const d = await r.json();
     if (!d.ok) { stEl.className = 'host-status error'; stEl.textContent = d.error || 'Scan failed'; return; }
     importCandidates = d.vlans || [];
@@ -249,11 +256,12 @@ function renderImportList() {
 }
 
 async function applyImport() {
+  const ip = document.getElementById('import-node').value;
   const ids = [...document.querySelectorAll('[data-import-id]:checked')].map(el => el.dataset.importId);
   const errEl = document.getElementById('import-apply-error');
   errEl.textContent = '';
   if (!ids.length) { errEl.textContent = 'Select at least one scope'; return; }
-  const r = await fetch('/api/vlans/import', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})});
+  const r = await fetch('/api/vlans/import', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids, ip})});
   const d = await r.json();
   if (d.errors && d.errors.length) errEl.textContent = d.errors.join('; ');
   if (d.imported && d.imported.length) {

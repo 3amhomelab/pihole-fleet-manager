@@ -210,6 +210,16 @@ def api_vlans_import_preview():
     parsed = pihole_push.parse_conf(content)
     for v in parsed:
         v["already_exists"] = v["id"] in existing_ids
+
+    # dnsmasq.d only ever holds the *extra* VLANs this app pushes — the node's
+    # own standard Pi-hole scope (and its static DHCP reservations) lives in
+    # Pi-hole's own config/API instead, so pull that in too for a full picture.
+    primary = store.primary_vlan_from_config(primary_dhcp.get_config(ip))
+    if primary:
+        primary["hosts"] = primary_dhcp.get_reservations(ip)
+        primary["already_exists"] = "primary" in existing_ids
+        parsed.insert(0, primary)
+
     return jsonify({"ok": True, "ip": ip, "vlans": parsed})
 
 
