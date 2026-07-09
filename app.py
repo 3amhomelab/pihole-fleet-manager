@@ -4,6 +4,7 @@ on top of Pi-hole's single built-in scope, config replication, software
 auto-updates, and node health monitoring (ping/DNS/API checks, uptime, VIP
 master detection, auto-heal escalation), all across every Pi-hole node."""
 import os
+from datetime import datetime
 
 from flask import Flask, Response, jsonify, render_template, request
 
@@ -442,6 +443,31 @@ def api_monitor_failover():
 def api_monitor_clear():
     monitor.clear_history()
     return jsonify({"ok": True})
+
+
+# --- Cross-service: DHCP config/leases + ip/mac->hostname lookup, for other
+# apps (e.g. Network-Health) that need Pi-hole DHCP awareness without
+# importing this app's internals directly ---
+
+@app.route("/api/known-hosts")
+def api_known_hosts():
+    leases = primary_dhcp.get_leases()
+    hosts_by_ip = {}
+    for v in store.list_vlans():
+        static_hosts = primary_dhcp.get_reservations() if v.get("is_primary") else v["hosts"]
+        merged = store.merge_dynamic_hosts(v, static_hosts, leases)
+        for h in merged:
+            if h.get("ip"):
+                hosts_by_ip[h["ip"]] = {"ip": h["ip"], "mac": h.get("mac", ""), "hostname": h.get("hostname", "")}
+    return jsonify({
+        "updated": datetime.utcnow().isoformat(),
+        "pihole_ips": pihole_push.PIHOLE_IPS,
+        "vip": monitor.PIHOLE_VIP,
+        "source": "fleet-manager",
+        "config": primary_dhcp.get_config(),
+        "leases": leases,
+        "hosts": list(hosts_by_ip.values()),
+    })
 
 
 # --- Activity log ---
