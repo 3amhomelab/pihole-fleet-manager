@@ -52,6 +52,18 @@
 <div class="toolbar">
   <h1>Health</h1>
   <div class="toolbar-actions">
+    <label class="hint" style="display:flex;align-items:center;gap:6px">
+      Check every
+      <select id="interval-select" class="btn" onchange="setInterval_(this.value)">
+        <option value="1">1 min</option>
+        <option value="5">5 min</option>
+        <option value="10">10 min</option>
+        <option value="15">15 min</option>
+        <option value="30">30 min</option>
+        <option value="45">45 min</option>
+        <option value="60">60 min</option>
+      </select>
+    </label>
     <button class="btn" id="failover-btn" onclick="triggerFailover()">Manual VIP failover</button>
     <button class="btn danger" onclick="clearHistory()">Clear history</button>
   </div>
@@ -122,6 +134,14 @@ async function loadState() {
 }
 
 function render(d) {
+  const intervalSelect = document.getElementById('interval-select');
+  if (document.activeElement !== intervalSelect) {
+    const minutes = String(Math.max(1, Math.round((d.check_interval || 60) / 60)));
+    if ([...intervalSelect.options].some(o => o.value === minutes)) {
+      intervalSelect.value = minutes;
+    }
+  }
+
   const vipConfigured = !!d.vip;
   document.getElementById('vip-section').style.display = vipConfigured ? '' : 'none';
   document.getElementById('vip-history-section').style.display = vipConfigured ? '' : 'none';
@@ -169,6 +189,15 @@ function render(d) {
       <span class="history-move">${esc(h.from) || '<em>none</em>'} → ${esc(h.to)}</span>
       <span class="history-ts">${new Date(h.ts).toLocaleString()}</span>
     </div>`).join('') : '<div class="empty-state">No VIP master changes recorded yet</div>';
+}
+
+async function setInterval_(minutes) {
+  await fetch('/api/monitor/interval', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({seconds: Number(minutes) * 60}),
+  });
+  loadState();
 }
 
 async function rebootNode(ip) {
