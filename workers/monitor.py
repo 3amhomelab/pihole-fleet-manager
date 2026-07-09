@@ -561,7 +561,7 @@ def trigger_failover() -> tuple:
 
 
 DIAG_DIR      = os.environ.get("MONITOR_DIAG_DIR", "/data/diagnostics")
-MAX_DIAG_REPORTS = 50
+MAX_DIAG_REPORTS_PER_NODE = int(os.environ.get("MONITOR_MAX_DIAG_REPORTS", "3"))
 
 
 def run_diagnostics(ip: str) -> tuple:
@@ -587,14 +587,18 @@ def run_diagnostics(ip: str) -> tuple:
             return False, f"Ran, but couldn't fetch the report: {cat_r.stderr.strip()[:100]}"
 
         os.makedirs(DIAG_DIR, exist_ok=True)
+        node_prefix = f"{_node_label(ip)}-"
         ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        local_name = f"{_node_label(ip)}-{ts}.log"
+        local_name = f"{node_prefix}{ts}.log"
         tmp = os.path.join(DIAG_DIR, local_name + ".tmp")
         with open(tmp, "w") as f:
             f.write(cat_r.stdout)
         os.replace(tmp, os.path.join(DIAG_DIR, local_name))
 
-        for old in sorted(os.listdir(DIAG_DIR))[:-MAX_DIAG_REPORTS]:
+        # Keep only the most recent MAX_DIAG_REPORTS_PER_NODE reports for
+        # *this* node — other nodes' reports are untouched.
+        node_reports = sorted(n for n in os.listdir(DIAG_DIR) if n.startswith(node_prefix))
+        for old in node_reports[:-MAX_DIAG_REPORTS_PER_NODE]:
             try:
                 os.remove(os.path.join(DIAG_DIR, old))
             except OSError:

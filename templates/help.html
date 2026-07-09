@@ -365,7 +365,9 @@
       <code>pihole-FTL</code>/keepalived status and journals, DNS resolution tests, DHCP config/leases,
       rate-limiting activity) and pulls the report back into fleet-manager's own <code>/data</code> volume,
       browsable from the "Saved diagnostics" list on this page — it doesn't just sit on the node
-      unreachable. Reports are pruned to the most recent 50.
+      unreachable. Keeps the most recent <code>MONITOR_MAX_DIAG_REPORTS</code> (default 3) reports
+      <em>per node</em> — running it again on the same node prunes that node's oldest report, other
+      nodes' reports are untouched.
     </p>
     <p>
       Requires <code>ping</code>/<code>dig</code> and the <code>NET_RAW</code> capability in the

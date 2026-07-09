@@ -130,6 +130,7 @@ config file to edit.
 | `MONITOR_REBOOT_RETRIES` | `2` | Extra SSH reboot attempts if still down, spaced by `MONITOR_REBOOT_AFTER_MINUTES`; exhausted retries leave the node down and flagged, no further automated action |
 | `MONITOR_REBOOT_AFTER_MINUTES` | `10` | Minutes between SSH reboot retries |
 | `MONITOR_UPTIME_INTERVAL` | `300` | Seconds between uptime refresh + VIP master re-detection |
+| `MONITOR_MAX_DIAG_REPORTS` | `3` | Saved diagnostics reports kept per node (oldest pruned automatically) |
 | `TZ` | `UTC` | Container timezone |
 
 Node health monitoring needs `ping` and `dig` inside the container plus the
