@@ -104,7 +104,7 @@ function renderGroups(groups) {
   for (const g of groups) {
     (byCategory[g.category] = byCategory[g.category] || []).push(g);
   }
-  const order = ['DHCP', 'DNS', 'General', 'Clients'];
+  const order = ['DHCP', 'DNS', 'General', 'Clients', 'Blocklists'];
   const cats = order.filter(c => byCategory[c]);
 
   document.getElementById('groups').innerHTML = cats.map(cat => `

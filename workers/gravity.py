@@ -20,9 +20,8 @@ from datetime import datetime, timedelta, time as dtime, timezone
 
 import requests
 
-from workers import activity_log
+from workers import activity_log, backup, maintenance, nodes, notify
 
-PIHOLE_IPS       = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
 PIHOLE_PASS      = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
 GRAVITY_HOUR     = int(os.environ.get("GRAVITY_UPDATE_HOUR", "4"))  # UTC hour; offset from PIHOLE_UPDATER_HOUR (3) on purpose
 DROP_THRESHOLD_PCT = float(os.environ.get("GRAVITY_DROP_THRESHOLD_PERCENT", "10"))
@@ -153,15 +152,18 @@ def _record(ip, status, count=None, reason=""):
         activity_log.log("gravity", f"{ip} gravity updated — {count} domain(s)")
     elif status == "dropped":
         activity_log.log("gravity", f"{ip} gravity domain count dropped {reason} — possible partial update failure", level="warning")
+        notify.send("gravity_drop", f"{ip} gravity domain count dropped {reason} — possible partial update failure", "warning")
     elif status == "failed":
         activity_log.log("gravity", f"{ip} gravity update failed" + (f": {reason}" if reason else ""), level="error")
+        notify.send("gravity_failed", f"{ip} gravity update failed" + (f": {reason}" if reason else ""), "error")
 
 
 def _next_auto_time(ip: str) -> str | None:
-    if ip not in PIHOLE_IPS:
+    ips = nodes.get_ips()
+    if ip not in ips:
         return None
-    n = len(PIHOLE_IPS)
-    idx = PIHOLE_IPS.index(ip)
+    n = len(ips)
+    idx = ips.index(ip)
     next_idx = _rotation.get("next_idx", 0) % n
     slots_until = (idx - next_idx) % n
 
@@ -177,7 +179,7 @@ def _next_auto_time(ip: str) -> str | None:
 def get_state() -> dict:
     with _state_lock:
         result = {}
-        for ip in PIHOLE_IPS:
+        for ip in nodes.get_ips():
             node = dict(_node_state.get(ip, {"history": []}))
             node["running"] = bool(_running.get(ip))
             node["next_auto"] = _next_auto_time(ip)
@@ -189,6 +191,11 @@ def get_state() -> dict:
 
 def _run_gravity(ip) -> tuple:
     """Returns (status, count, reason)."""
+    try:
+        backup.take_backup("pre-gravity")
+    except Exception as e:
+        print(f"[gravity] pre-gravity backup snapshot failed (continuing anyway): {e}")
+
     before = _node_state.get(ip, {}).get("last_domain_count")
     output = _api_post_gravity(ip)
     if output is None:
@@ -214,7 +221,7 @@ def _do_gravity(ip):
 
 
 def trigger_gravity(ip: str) -> tuple:
-    if ip not in PIHOLE_IPS:
+    if ip not in nodes.get_ips():
         return False, "Invalid target"
     if _running.get(ip):
         return False, "Gravity update already in progress"
@@ -233,17 +240,26 @@ def _gravity_loop():
         now   = datetime.utcnow()
         today = now.timetuple().tm_yday
 
-        if now.hour == GRAVITY_HOUR and today != _rotation["last_day"] and PIHOLE_IPS:
+        ips = nodes.get_ips()
+        if now.hour == GRAVITY_HOUR and today != _rotation["last_day"] and ips:
             _rotation["last_day"] = today
-            idx    = _rotation.get("next_idx", 0) % len(PIHOLE_IPS)
-            target = PIHOLE_IPS[idx]
-            print(f"[gravity] Slot {idx+1}/{len(PIHOLE_IPS)}: updating {target}")
+            idx    = _rotation.get("next_idx", 0) % len(ips)
+            target = ips[idx]
+
+            if maintenance.is_under_maintenance(target):
+                print(f"[gravity] Slot {idx+1}/{len(ips)}: {target} is in maintenance mode — skipping, will retry next cycle")
+                _rotation["next_idx"] = (idx + 1) % len(ips)
+                _save_state()
+                time.sleep(60)
+                continue
+
+            print(f"[gravity] Slot {idx+1}/{len(ips)}: updating {target}")
 
             _running[target] = True
             try:
                 status, count, reason = _run_gravity(target)
                 _record(target, status, count, reason)
-                _rotation["next_idx"] = (idx + 1) % len(PIHOLE_IPS)
+                _rotation["next_idx"] = (idx + 1) % len(ips)
                 _save_state()
             finally:
                 _running[target] = False

@@ -14,9 +14,8 @@ import subprocess
 import threading
 from datetime import datetime
 
-from workers import activity_log
+from workers import activity_log, nodes
 
-PIHOLE_IPS  = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
 SSH_USER    = os.environ.get("PIHOLE_SSH_USER", "root")
 KEY_PATH    = os.environ.get("PIHOLE_SSH_KEY", "/data/ssh/pihole_key")
 HOST_ENV_FILE = os.environ.get("HOST_ENV_FILE", "/config/host.env")
@@ -76,7 +75,7 @@ def test_key_auth(ip: str) -> bool:
 
 
 def get_node_status() -> list:
-    return [{"ip": ip, "key_auth_ok": test_key_auth(ip)} for ip in PIHOLE_IPS]
+    return [{"ip": ip, "key_auth_ok": test_key_auth(ip)} for ip in nodes.get_ips()]
 
 
 def _generate_keypair():
@@ -169,7 +168,8 @@ def _setup_loop():
         password  = _pending_args.get("password", "")
         regenerate = _pending_args.get("regenerate", False)
 
-        if not PIHOLE_IPS:
+        ips = nodes.get_ips()
+        if not ips:
             _set_status("error", "No PIHOLE_IPS configured", [])
             continue
         if not password:
@@ -193,7 +193,7 @@ def _setup_loop():
                 continue
 
             failed = []
-            for ip in PIHOLE_IPS:
+            for ip in ips:
                 step(f"Distributing public key to {ip}")
                 ok, err = _distribute_key(ip, password, pubkey)
                 if not ok:
@@ -211,8 +211,8 @@ def _setup_loop():
                 with open(KEY_PATH, "rb") as f:
                     key_b64 = base64.b64encode(f.read()).decode()
                 _write_key_to_host_env(key_b64)
-                _set_status("success", f"Key trusted by {', '.join(PIHOLE_IPS)}", log, key_b64=key_b64)
-                activity_log.log("setup", f"SSH trust established with {', '.join(PIHOLE_IPS)}")
+                _set_status("success", f"Key trusted by {', '.join(ips)}", log, key_b64=key_b64)
+                activity_log.log("setup", f"SSH trust established with {', '.join(ips)}")
         except subprocess.CalledProcessError as e:
             _set_status("error", f"ssh-keygen failed: {e}", log)
             activity_log.log("setup", f"SSH trust setup error: {e}", level="error")

@@ -16,10 +16,9 @@ from datetime import datetime
 
 import requests
 
-from workers import activity_log
+from workers import activity_log, maintenance, nodes, notify
 
 # --- Config ---
-PIHOLE_IPS        = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
 # VIP: monitored for health but never auto-rebooted (it's a virtual IP, not a node)
 PIHOLE_VIP        = os.environ.get("PIHOLE_VIP", "").strip()
 PIHOLE_PASS       = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
@@ -99,7 +98,7 @@ def _get_uptime(ip) -> dict:
 
 def _node_label(ip: str) -> str:
     try:
-        return f"pihole{PIHOLE_IPS.index(ip) + 1}"
+        return f"pihole{nodes.get_ips().index(ip) + 1}"
     except ValueError:
         return ip
 
@@ -183,7 +182,7 @@ def _quorum_ok(failing_ip: str) -> bool:
     the thing that's actually unhealthy."""
     healthy = 0
     with _lock:
-        for ip in PIHOLE_IPS:
+        for ip in nodes.get_ips():
             if ip == failing_ip or ip == PIHOLE_VIP:
                 continue
             checks = _node_state.get(ip, {}).get("checks", [])
@@ -257,14 +256,15 @@ def _save():
 
 def _monitor_loop():
     _load()
-    _monitor_ips = PIHOLE_IPS + ([PIHOLE_VIP] if PIHOLE_VIP and PIHOLE_VIP not in PIHOLE_IPS else [])
-    print(f"[monitor] Watching: {_monitor_ips}  domains={MONITOR_DOMAINS}")
+    print(f"[monitor] domains={MONITOR_DOMAINS}")
     print(f"[monitor] VIP (monitor-only): {PIHOLE_VIP or 'none'}")
     print(f"[monitor] Down confirmation: {CONFIRM_ATTEMPTS} failed probes, {CONFIRM_INTERVAL_SECS}s apart, before reporting down")
     print(f"[monitor] SSH reboot: after {REBOOT_AFTER} consecutive failures, up to {REBOOT_RETRIES} retries spaced {REBOOT_AFTER_MINS}m apart")
 
     while True:
         ts = int(time.time())
+        ips = nodes.get_ips()
+        _monitor_ips = ips + ([PIHOLE_VIP] if PIHOLE_VIP and PIHOLE_VIP not in ips else [])
 
         for ip in _monitor_ips:
             result = _check_node(ip)
@@ -309,6 +309,9 @@ def _monitor_loop():
                 if ip == PIHOLE_VIP:
                     continue
 
+                if maintenance.is_under_maintenance(ip):
+                    continue  # still tracked/logged as down above, just no auto-reboot escalation
+
                 attempts = _reboot_attempts.get(ip, 0)
                 last_attempt_ts = _last_reboot_attempt.get(ip, 0)
 
@@ -325,6 +328,7 @@ def _monitor_loop():
                     if not _quorum_ok(ip):
                         print(f"[monitor] {ip} — skipping reboot: fewer than 2 other nodes are healthy")
                         activity_log.log("monitor", f"{_node_label(ip)} down but reboot skipped — quorum not met", level="error")
+                        notify.send("monitor_quorum", f"{_node_label(ip)} is down and auto-reboot was skipped — fewer than 2 other Pi-hole nodes are healthy", "error")
                     else:
                         attempts += 1
                         print(f"[monitor] {ip} — SSH reboot attempt {attempts}/{1 + REBOOT_RETRIES} (consec={_consec_fail[ip]})")
@@ -351,6 +355,7 @@ def _monitor_loop():
                         f"{_node_label(ip)} still down after {attempts} SSH reboot attempts — leaving down, flagged for manual intervention",
                         level="error",
                     )
+                    notify.send("monitor_down", f"{_node_label(ip)} ({ip}) is still down after {attempts} SSH reboot attempts — needs manual intervention", "error")
                     _reboot_exhausted.add(ip)
 
         _save()
@@ -417,10 +422,11 @@ def _detect_vip_master():
     Stage 2: Pi-hole API session test — FTL sessions are in-process memory, so
     a session token issued by the VIP only authenticates against the node
     that actually issued it."""
-    if not PIHOLE_VIP or not PIHOLE_IPS:
+    ips = nodes.get_ips()
+    if not PIHOLE_VIP or not ips:
         return
 
-    for ip in PIHOLE_IPS:
+    for ip in ips:
         if ip == PIHOLE_VIP:
             continue
         try:
@@ -439,7 +445,7 @@ def _detect_vip_master():
         vip_sid = r.json().get("session", {}).get("sid", "")
         if not vip_sid:
             return
-        for ip in PIHOLE_IPS:
+        for ip in ips:
             if ip == PIHOLE_VIP:
                 continue
             try:
@@ -492,7 +498,7 @@ def _failover_vip():
 
 def _uptime_loop():
     while True:
-        for ip in PIHOLE_IPS:
+        for ip in nodes.get_ips():
             if ip == PIHOLE_VIP:
                 continue
             uptime = _get_uptime(ip)
@@ -536,7 +542,7 @@ def set_interval(seconds):
 
 
 def reboot(pihole_ip):
-    if pihole_ip not in PIHOLE_IPS:
+    if pihole_ip not in nodes.get_ips():
         print(f"[monitor] Refusing reboot — {pihole_ip} is not a configured Pi-hole node")
         return
 
@@ -590,7 +596,7 @@ def run_diagnostics(ip: str) -> tuple:
     script used by the original Network-Health monitor), then pull the
     generated report back over SSH and save it into fleet-manager's own
     /data volume — the report otherwise only ever exists on that one node."""
-    if ip == PIHOLE_VIP or ip not in PIHOLE_IPS:
+    if ip == PIHOLE_VIP or ip not in nodes.get_ips():
         return False, "Invalid target"
     try:
         r = _ssh_cmd(ip, "sudo /etc/keepalived/collect-diag.sh manual", timeout=120)
@@ -659,6 +665,14 @@ def get_diagnostics_report(name: str):
         return None
     with open(path) as f:
         return f.read()
+
+
+def check_node_health(ip: str) -> dict:
+    """Public wrapper around the same confirm-before-declaring-down probe the
+    monitor loop itself uses — reused by updater.py's post-upgrade health
+    gate so a fresh reboot isn't judged unhealthy on the first probe while
+    the node is still coming back up."""
+    return _check_node(ip)
 
 
 def clear_history():

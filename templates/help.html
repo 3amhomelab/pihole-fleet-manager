@@ -51,6 +51,11 @@
     <a href="#recovery">Recovery</a>
     <a href="#lease-conflicts">Lease conflicts</a>
     <a href="#external-dhcp">External DHCP sync</a>
+    <a href="#backup">Backup &amp; rollback</a>
+    <a href="#netbox">NetBox import</a>
+    <a href="#notify">Notifications</a>
+    <a href="#nodes">Fleet nodes</a>
+    <a href="#auth">Admin login</a>
     <a href="#setup">Setup (SSH)</a>
     <a href="#log">Activity log</a>
     <a href="#health">Health</a>
@@ -66,10 +71,16 @@
       settings in sync, one place to see what changed and when.
     </p>
     <p>
-      Everything here talks directly to each node's own IP address (set via <code>PIHOLE_IPS</code>) and,
-      for anything that needs to write files, over SSH. Nothing requires a load balancer or virtual IP in
-      front of the cluster — the one exception is the <strong>Failover</strong> tab, which is entirely
-      optional. See that section below.
+      Everything here talks directly to each node's own IP address — seeded once from
+      <code>PIHOLE_IPS</code>, managed afterward from the <a href="#nodes" style="color:var(--blue)">Fleet
+      Nodes</a> section — and, for anything that needs to write files, over SSH. Nothing requires a load
+      balancer or virtual IP in front of the cluster — the one exception is the <strong>Failover</strong>
+      tab, which is entirely optional. See that section below.
+    </p>
+    <p>
+      Everything is open by default (no login) and inert unless configured for anything opt-in — see
+      <a href="#auth" style="color:var(--blue)">Admin login</a>, <a href="#notify" style="color:var(--blue)">Notifications</a>,
+      and <a href="#netbox" style="color:var(--blue)">NetBox import</a> if you want those.
     </p>
   </div>
 
@@ -171,8 +182,21 @@
       locally per node, so the same group can end up with a completely different id on each one if
       created independently. Enabling this will auto-create a missing group on other nodes, which is why
       it defaults off.</p>
+    <p><strong>Adlists &amp; domain allow/deny overrides</strong> (Blocklists category, both
+      <span class="badge default-off">off by default</span>) extend the same name/address-matched
+      reconciliation to gravity.db: adlist URLs (matched by address) and individual exact/regex domain
+      overrides (matched by type+kind+domain). This is what actually keeps <em>"is this domain
+      blocked"</em> consistent fleet-wide — the config.toml settings above never touch gravity.db at all,
+      so without this, a domain whitelisted on one node stays blocked on the others. Enabling either
+      triggers a gravity update on any node it changes, same reasoning as
+      <a href="#gravity" style="color:var(--blue)">staggered gravity updates</a>.</p>
     <p><strong>Auto-replication</strong>: set an interval (minutes) to run this on a schedule instead of
       only on manual click.</p>
+    <p>
+      A snapshot of every enabled setting is taken automatically right before each run applies anything —
+      see <a href="#backup" style="color:var(--blue)">Backup &amp; rollback</a> if a bad merge needs
+      undoing.
+    </p>
   </div>
 
   <div class="section-title" id="drift">Drift check</div>
@@ -225,6 +249,12 @@
       per-domain count across the whole fleet (Pi-hole's API has no cheap way to compute that) — good for
       "what's dominating right now," not a precise source of truth for long-tail analysis.
     </p>
+    <p>
+      <strong>Search query log across the fleet</strong> (further down the page) fans a domain and/or
+      client-IP search out to every node's own query log and merges the results, tagged with which node
+      answered — Pi-hole's own dashboard only ever shows one node's log, so this is the fastest way to
+      answer "was this domain blocked, and where."
+    </p>
   </div>
 
   <div class="section-title" id="updater">Updater</div>
@@ -234,7 +264,18 @@
       Checks each node's Pi-hole software version and can upgrade it (<code>pihole -up</code>, then
       reboots). One node is auto-upgraded per day on a rotating schedule (so the whole fleet is never
       mid-upgrade at once), and you can trigger any individual node manually at any time. Upgrade history
-      (upgraded / already up to date / failed) is kept per node.
+      (upgraded / already up to date / failed) is kept per node. A snapshot is taken automatically before
+      every upgrade attempt — see <a href="#backup" style="color:var(--blue)">Backup &amp; rollback</a>.
+    </p>
+    <p>
+      <strong>Post-upgrade health gate:</strong> a <code>pihole -up</code> that exits clean isn't proof the
+      node actually still works — after the reboot, this runs the same ping→DNS→API health check the
+      monitor itself uses (waiting <code>UPDATER_POST_UPGRADE_WAIT_SECS</code> first). If that check fails,
+      the result is recorded as <strong>upgrade_health_failed</strong> and the daily round-robin
+      <strong>halts</strong> — it will not advance to the next node the following day — until you click
+      <strong>Resume rotation</strong> on this page. A hard upgrade failure (retries exhausted) halts the
+      same way. This is what stops a bad Pi-hole release from silently rolling across the whole fleet, one
+      node per day.
     </p>
   </div>
 
@@ -252,7 +293,9 @@
       update, this compares the node's total blocklist domain count (summed across all enabled block
       lists) against its own count before the update; a drop larger than
       <code>GRAVITY_DROP_THRESHOLD_PERCENT</code> (default 10%) is logged as a probable partial-update
-      failure instead of silently accepted as a smaller-but-successful blocklist.
+      failure instead of silently accepted as a smaller-but-successful blocklist. A snapshot is taken
+      automatically before every gravity update — see
+      <a href="#backup" style="color:var(--blue)">Backup &amp; rollback</a>.
     </p>
   </div>
 
@@ -263,8 +306,10 @@
       Pi-hole's own Teleporter backup is config-only — it doesn't contain the real gravity/query
       databases, so it's a poor way to actually rebuild a node. This tab instead clones a
       <strong>healthy, currently-running</strong> node directly onto a target: settings, DHCP static
-      reservations, groups and client group assignments, and every VLAN's dnsmasq.d scope — then triggers
-      a gravity update on the target so its blocklists populate too.
+      reservations, groups and client group assignments, adlists and domain allow/deny overrides, and
+      every VLAN's dnsmasq.d scope — then triggers a gravity update on the target so its blocklists
+      populate correctly (against the <em>cloned</em> adlists, not whatever the target happened to have
+      before).
     </p>
     <p>
       This is a deliberate <strong>one-way overwrite</strong>, not a merge — unlike Replication (which
@@ -307,6 +352,92 @@
     </p>
   </div>
 
+  <div class="section-title" id="backup">Backup &amp; rollback</div>
+  <div class="card">
+    <h3>What it's for <a href="/backup">Open →</a></h3>
+    <p>
+      Multi-master replication faithfully propagates mistakes too — a bad setting changed on one node wins
+      the recency contest and lands on every node, and <a href="#recovery" style="color:var(--blue)">Recovery</a>
+      can't help because every "healthy peer" now has the same bad config. This tab snapshots every
+      node's replication-managed settings, static reservations, groups, client assignments, adlists, and
+      domain overrides to a file, so there's always something to roll back to.
+    </p>
+    <p><strong>When snapshots are taken:</strong> automatically right before every replication push,
+      gravity update, and software upgrade attempt; on-demand via <strong>Back up now</strong>; and
+      optionally on a <strong>daily/weekly/monthly</strong> schedule. Keeps the most recent snapshots
+      (1–5, your choice) — older ones are pruned automatically.</p>
+    <p><strong>Rolling back</strong> restores a chosen snapshot to one specific node or the whole fleet,
+      then triggers a gravity update on whatever it touched. This is a one-way overwrite, same as
+      Recovery — not a merge.</p>
+  </div>
+
+  <div class="section-title" id="netbox">NetBox import <span class="badge default-off">opt-in</span></div>
+  <div class="card">
+    <h3>What it's for <a href="/setup">Open → (Setup page)</a></h3>
+    <p>
+      Reads VLANs from NetBox's IPAM and, for each one's associated Prefix, every IP Address in that
+      prefix that's assigned to a device or VM interface with a MAC address — as candidate static host
+      reservations (hostname from the IP's DNS name, falling back to the device/VM name).
+    </p>
+    <p>
+      Gateway and the DHCP-issuable range aren't modeled in NetBox, so both are a best-effort guess (first
+      usable host as gateway) — review and edit on the <a href="#vlans" style="color:var(--blue)">VLANs</a>
+      page after import, don't trust them blindly. Entirely read-only against NetBox; requires
+      <code>NETBOX_URL</code> and <code>NETBOX_TOKEN</code> — inert otherwise.
+    </p>
+  </div>
+
+  <div class="section-title" id="notify">Notifications <span class="badge default-off">opt-in</span></div>
+  <div class="card">
+    <p>
+      A generic webhook (<code>NOTIFY_WEBHOOK_URL</code>) — no specific provider baked in, so it works
+      with Home Assistant's REST API, ntfy, a Telegram bridge, n8n, or anything else that accepts a
+      webhook. POSTs a small JSON payload (<code>event</code>, <code>message</code>, <code>severity</code>,
+      <code>source</code>) on:
+    </p>
+    <ul>
+      <li>A node still down after all SSH reboot retries are exhausted (or skipped for lack of quorum)</li>
+      <li>A gravity update flagged as a probable partial failure, or a hard gravity failure</li>
+      <li>An upgrade failure, or a failed post-upgrade health check</li>
+    </ul>
+    <p>Delivery is fire-and-forget in a background thread, so a slow/unreachable webhook endpoint never
+      blocks the action that triggered it. Inert unless the URL is set.</p>
+  </div>
+
+  <div class="section-title" id="nodes">Fleet nodes</div>
+  <div class="card">
+    <h3>What it's for <a href="/setup">Open → (top of Setup page)</a></h3>
+    <p>
+      The list of Pi-hole node IPs every feature in this app operates on. <code>PIHOLE_IPS</code> seeds
+      this list once on first boot; after that, this UI-managed list is authoritative, not the
+      environment variable. Add or remove a node here and every loop (health monitor, replication,
+      updater, gravity, failover) picks up the change immediately — no container recreate needed.
+    </p>
+    <p>Removing a node here only stops this app from managing/monitoring it — it doesn't touch the node
+      itself. Add a new node here first, then run <a href="#setup" style="color:var(--blue)">SSH trust
+      setup</a> and (optionally) <a href="#recovery" style="color:var(--blue)">Recovery</a> to clone a
+      healthy peer onto it.</p>
+  </div>
+
+  <div class="section-title" id="auth">Admin login <span class="badge default-off">off by default</span></div>
+  <div class="card">
+    <h3>What it's for <a href="/setup">Open → (top of Setup page)</a></h3>
+    <p>
+      By default, every page and API endpoint is open to anyone who can reach this app — fine behind a
+      trusted LAN, not fine if that changes. Flip the switch on the Setup page, set a password once, and
+      every page/API call requires it afterward (session-based — log in once per browser, not per
+      request).
+    </p>
+    <p>
+      The password is written back into this stack's own <code>.env</code>
+      (<code>ADMIN_PASSWORD</code>), the same write-back technique the SSH key uses, so it survives a
+      container recreate and isn't only sitting in the <code>/data</code> volume.
+      <code>/api/known-hosts</code> stays reachable without a session either way — other apps (e.g.
+      Network-Health) poll it directly for Pi-hole DHCP awareness, and gating it would silently break
+      that integration.
+    </p>
+  </div>
+
   <div class="section-title" id="setup">Setup (SSH trust)</div>
   <div class="card">
     <h3>What it's for <a href="/setup">Open →</a></h3>
@@ -320,6 +451,11 @@
       Run this once when first setting the app up, and again (with <strong>Regenerate</strong>) if you
       ever need to rotate the key. Per-node status here also doubles as a connectivity/permissions check
       — it verifies both SSH key auth and passwordless <code>sudo</code> for the configured SSH user.
+    </p>
+    <p>
+      This same page also has <a href="#nodes" style="color:var(--blue)">Fleet Nodes</a> (add/remove
+      nodes), <a href="#netbox" style="color:var(--blue)">NetBox import</a>, and
+      <a href="#auth" style="color:var(--blue)">Admin login</a>.
     </p>
   </div>
 
@@ -378,6 +514,14 @@
       nodes' reports are untouched.
     </p>
     <p>
+      <strong>Maintenance mode</strong> — put a node into maintenance before working on it by hand (a
+      "Start maintenance" button on each node card, minutes-based, always auto-expires — no permanent-off
+      option). While active, this app's own automation leaves that node alone: no auto-reboot escalation,
+      no DHCP failover enforcement, and it's skipped by replication/drift/gravity/updater auto-rotation
+      (each retries it again next cycle). Health checks themselves keep running for visibility — only the
+      automated <em>reactions</em> are paused.
+    </p>
+    <p>
       Requires <code>ping</code>/<code>dig</code> and the <code>NET_RAW</code> capability in the
       container — both are already set up in the published image and <code>docker-compose.yml</code>.
     </p>
@@ -424,6 +568,21 @@
         <code>PIHOLE_SSH_USER</code> is a non-root account without passwordless <code>sudo</code> for
         <code>reboot</code>/<code>systemctl</code>/the diagnostics script. See
         <a href="#setup" style="color:var(--blue)">Setup</a> and the SSH account requirements above.</li>
+      <li><strong>Updater shows a red "rotation halted" banner</strong> — an upgrade either failed outright
+        or failed its post-upgrade health check. Fix the affected node, confirm it's healthy on the
+        <a href="#health" style="color:var(--blue)">Health</a> page, then click <strong>Resume
+        rotation</strong> on the Updater page.</li>
+      <li><strong>Locked out after enabling Admin login</strong> — the password is written to this stack's
+        <code>.env</code> as <code>ADMIN_PASSWORD</code>; set it back to blank there and restart the
+        container to disable login entirely without needing to authenticate first.</li>
+      <li><strong>NetBox scan finds nothing / a VLAN has 0 hosts</strong> — the VLAN needs an associated
+        Prefix in NetBox's IPAM, and hosts need an IP Address assigned to a device/VM interface that has a
+        MAC address set (not just an IP with no assignment). Check <code>NETBOX_URL</code>/
+        <code>NETBOX_TOKEN</code> are set and <code>NETBOX_VERIFY_SSL</code> matches your NetBox's cert.</li>
+      <li><strong>Rollback reports errors partway through</strong> — same pattern as Recovery: the log
+        shows exactly which node/step failed, earlier successful steps aren't undone, and it's usually
+        safe to re-run the rollback once the underlying issue (e.g. a node unreachable at rollback time)
+        is fixed.</li>
     </ul>
   </div>
 </div>

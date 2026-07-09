@@ -31,6 +31,18 @@ td { padding:8px 12px;border-bottom:1px solid rgba(45,53,80,.5); }
 .two-col { display:grid;grid-template-columns:1fr 1fr;gap:20px; }
 @media (max-width:900px) { .two-col { grid-template-columns:1fr; } }
 .card { background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden; }
+
+.search-row { display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px; }
+.search-row input { background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;min-width:180px; }
+.search-btn { background:var(--blue-bg);border:1px solid var(--blue);color:var(--blue);border-radius:7px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer; }
+.search-btn:hover:not(:disabled) { background:rgba(59,130,246,.25); }
+.node-status-row { display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px; }
+.node-status-pill { font-size:11px;padding:3px 10px;border-radius:999px;font-family:var(--mono); }
+.node-status-pill.ok { background:var(--green-bg);color:var(--green); }
+.node-status-pill.unreachable { background:var(--red-bg);color:var(--red); }
+.status-cell { font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px; }
+.status-cell.blocked { background:var(--red-bg);color:var(--red); }
+.status-cell.allowed { background:var(--green-bg);color:var(--green); }
 </style>
 {% endblock %}
 
@@ -64,6 +76,25 @@ td { padding:8px 12px;border-bottom:1px solid rgba(45,53,80,.5); }
         <tbody id="clients-body"></tbody>
       </table>
     </div>
+  </div>
+
+  <div class="section-title">Search query log across the fleet</div>
+  <p class="hint" style="margin-bottom:14px">
+    Fans a search out to every node's own query log and merges the results — Pi-hole's own dashboard
+    only ever shows one node, so "was this domain blocked, and which node answered" normally means
+    checking every node's log by hand.
+  </p>
+  <div class="search-row">
+    <input type="text" id="q-domain" placeholder="Domain (substring, e.g. doubleclick.net)">
+    <input type="text" id="q-client" placeholder="Client IP (optional)">
+    <button class="search-btn" id="q-btn" onclick="runQueryLogSearch()">Search</button>
+  </div>
+  <div class="node-status-row" id="q-node-status"></div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Time</th><th>Domain</th><th>Client</th><th>Status</th><th>Node</th></tr></thead>
+      <tbody id="q-results-body"><tr><td colspan="5" class="hint" style="padding:16px">Enter a domain or client IP above and search.</td></tr></tbody>
+    </table>
   </div>
 
   <div class="section-title">Top denied across the fleet</div>
@@ -138,5 +169,39 @@ function render(d) {
 
 setInterval(load, 15000);
 load();
+
+// --- Fleet-wide query log search ---
+function statusClass(status) {
+  return (status || '').toUpperCase().includes('BLOCK') ? 'blocked' : 'allowed';
+}
+async function runQueryLogSearch() {
+  const domain = document.getElementById('q-domain').value.trim();
+  const client = document.getElementById('q-client').value.trim();
+  const btn = document.getElementById('q-btn');
+  const body = document.getElementById('q-results-body');
+  if (!domain && !client) { alert('Enter a domain or client IP'); return; }
+  btn.disabled = true; btn.textContent = 'Searching…';
+  try {
+    const params = new URLSearchParams();
+    if (domain) params.set('domain', domain);
+    if (client) params.set('client', client);
+    const r = await fetch('/api/query-log/search?' + params.toString());
+    const d = await r.json();
+    document.getElementById('q-node-status').innerHTML = Object.entries(d.node_status || {}).map(([ip, s]) => `
+      <span class="node-status-pill ${s}">${esc(ip)}: ${esc(s)}</span>
+    `).join('');
+    const queries = d.queries || [];
+    body.innerHTML = queries.length ? queries.map(q => `
+      <tr>
+        <td>${q.time ? new Date(q.time * 1000).toLocaleString() : ''}</td>
+        <td>${esc(q.domain)}</td>
+        <td>${esc(q.client && (q.client.name || q.client.ip) || '')}</td>
+        <td><span class="status-cell ${statusClass(q.status)}">${esc(q.status || '')}</span></td>
+        <td class="hint">${esc(q.node)}</td>
+      </tr>`).join('') : '<tr><td colspan="5" class="hint" style="padding:16px">No matching queries found</td></tr>';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Search';
+  }
+}
 </script>
 {% endblock %}

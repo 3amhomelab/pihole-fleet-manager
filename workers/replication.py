@@ -16,14 +16,14 @@ import ipaddress
 import json
 import os
 import threading
+import urllib.parse
 from collections import deque
 from datetime import datetime
 
 import requests
 
-from workers import activity_log, validate
+from workers import activity_log, gravity, maintenance, nodes, validate
 
-PIHOLE_IPS      = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
 PIHOLE_PASS     = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
 OPTIONS_FILE    = os.environ.get("REPLICATION_OPTIONS_FILE", "/data/replication.json")
 AUTO_FILE       = os.environ.get("REPLICATION_AUTO_FILE", "/data/replication_auto.json")
@@ -32,6 +32,8 @@ CHECK_INTERVAL_SECS = 30  # how often the loop wakes up to check whether auto-re
 
 HOSTS_PATH = "dhcp.hosts"  # merged specially (mac-keyed union) rather than as a plain scalar
 CLIENT_GROUPS_PATH = "clients.groups"  # pseudo-path: gates group/client reconciliation (gravity.db, not config.toml)
+ADLISTS_PATH = "lists.adlists"    # pseudo-path: gates adlist (blocklist/allowlist URL) reconciliation
+DOMAINS_PATH = "domains.overrides"  # pseudo-path: gates individual domain allow/deny reconciliation
 
 # --- Groups: each maps a user-facing toggle to specific config.* paths ---
 GROUPS = [
@@ -84,6 +86,21 @@ GROUPS = [
              "so the same group can have a different id on each one). Off by default — unlike the "
              "settings above, this creates missing groups on other nodes automatically.",
      "paths": [CLIENT_GROUPS_PATH], "default": False},
+
+    {"id": "adlists", "category": "Blocklists", "label": "Adlists (blocklist/allowlist URLs)",
+     "desc": "Reconciles gravity.db adlist URLs (both block and allow lists) across nodes, matched by "
+             "address rather than raw id. This is what actually keeps 'which domains get blocked' "
+             "consistent fleet-wide — without it, a VIP that can answer from any node means you never "
+             "know whether a domain will be blocked. Off by default — like client groups, this creates "
+             "missing adlists on other nodes automatically, and triggers a gravity update on any node "
+             "it changes (otherwise the new list wouldn't take effect until that node's next scheduled "
+             "gravity run, up to a day away).",
+     "paths": [ADLISTS_PATH], "default": False},
+    {"id": "domain_overrides", "category": "Blocklists", "label": "Domain allow/deny overrides",
+     "desc": "Reconciles individual exact/regex domain allow and deny entries (gravity.db), matched by "
+             "type+kind+domain. Off by default, same reasoning as adlists — also triggers a gravity "
+             "update on any node it changes.",
+     "paths": [DOMAINS_PATH], "default": False},
 ]
 
 _sid_cache = {}
@@ -98,7 +115,7 @@ _event = threading.Event()
 
 _PATH_DEFAULT = {p: g["default"] for g in GROUPS for p in g["paths"]}
 _ALL_PATHS    = list(_PATH_DEFAULT.keys())
-_SCALAR_PATHS = [p for p in _ALL_PATHS if p not in (HOSTS_PATH, CLIENT_GROUPS_PATH)]
+_SCALAR_PATHS = [p for p in _ALL_PATHS if p not in (HOSTS_PATH, CLIENT_GROUPS_PATH, ADLISTS_PATH, DOMAINS_PATH)]
 
 
 def _load_options() -> dict:
@@ -207,10 +224,12 @@ def _load_ledger() -> dict:
             data.setdefault("hosts", {})
             data.setdefault("groups", {})
             data.setdefault("client_groups", {})
+            data.setdefault("adlists", {})
+            data.setdefault("domains", {})
             return data
         except (json.JSONDecodeError, OSError):
             pass
-    return {"scalars": {}, "hosts": {}, "groups": {}, "client_groups": {}}
+    return {"scalars": {}, "hosts": {}, "groups": {}, "client_groups": {}, "adlists": {}, "domains": {}}
 
 
 def _save_ledger(ledger: dict) -> None:
@@ -316,6 +335,27 @@ def _api_post(ip, path, body):
             return None
         try:
             r = requests.post(f"http://{ip}/api{path}", json=body, headers={"sid": sid}, timeout=15)
+            if r.status_code == 401 and attempt == 0:
+                with _sid_lock:
+                    _sid_cache.pop(ip, None)
+                continue
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            return None
+    return None
+
+
+def _api_put(ip, path, body):
+    for attempt in range(2):
+        with _sid_lock:
+            sid = _sid_cache.get(ip, "")
+        if not sid:
+            sid = _auth(ip)
+        if not sid:
+            return None
+        try:
+            r = requests.put(f"http://{ip}/api{path}", json=body, headers={"sid": sid}, timeout=15)
             if r.status_code == 401 and attempt == 0:
                 with _sid_lock:
                     _sid_cache.pop(ip, None)
@@ -480,6 +520,122 @@ def _merge_groups_and_clients(nodes: list, step) -> tuple:
     return applied, verify_failures
 
 
+def _fetch_lists(ip):
+    """{address: list_dict}, keyed by address alone (not address+type) — in
+    practice the same URL is essentially never used as both a block and an
+    allow list, so this is an acceptable simplification of gravity.db's real
+    (address, type) compound key."""
+    resp = _api_get(ip, "/lists")
+    return None if resp is None else {l["address"]: l for l in resp.get("lists", [])}
+
+
+def _fetch_domains(ip):
+    """{'type|kind|domain': domain_dict} — exact/regex allow/deny overrides."""
+    resp = _api_get(ip, "/domains")
+    if resp is None:
+        return None
+    return {f"{d['type']}|{d['kind']}|{d['domain']}": d for d in resp.get("domains", [])}
+
+
+def _merge_adlists_and_domains(nodes: list, step, adlists_enabled: bool, domains_enabled: bool) -> tuple:
+    """Reconciles gravity.db adlists and individual domain allow/deny overrides
+    across nodes — this is what actually keeps "is this domain blocked"
+    consistent fleet-wide, which the config.toml-only replication above
+    doesn't touch at all. Same name/address-matched approach as
+    _merge_groups_and_clients (ids are per-node local), and reuses that
+    function's group-name translation logic independently here since either
+    of these two toggles can be on without client_groups being on."""
+    if not adlists_enabled and not domains_enabled:
+        return [], [], set()
+
+    now_iso = datetime.now().isoformat()
+    applied, verify_failures = [], []
+    changed_nodes = set()
+
+    step("Fetching groups from every node (for adlist/domain group assignment)")
+    node_groups = {ip: g for ip in nodes if (g := _fetch_groups(ip)) is not None}
+    group_nodes = [ip for ip in nodes if ip in node_groups]
+    if len(group_nodes) < 2:
+        return applied, verify_failures, changed_nodes
+
+    name_to_id = {ip: {n: g["id"] for n, g in node_groups[ip].items()} for ip in group_nodes}
+    id_to_name = {ip: {g["id"]: n for n, g in node_groups[ip].items()} for ip in group_nodes}
+
+    def _group_names(ip, group_ids):
+        return tuple(sorted(id_to_name[ip].get(gid, f"#{gid}") for gid in (group_ids or [])))
+
+    def _group_ids(ip, names, warn_ctx):
+        ids = [name_to_id[ip][n] for n in names if n in name_to_id[ip]]
+        missing = [n for n in names if n not in name_to_id[ip]]
+        if missing:
+            verify_failures.append(f"{warn_ctx} on {ip}: missing group(s) {missing}, assigned without them")
+        return ids
+
+    ledger = _load_ledger()
+
+    if adlists_enabled:
+        step("Fetching adlists from every node")
+        node_lists = {ip: l for ip in group_nodes if (l := _fetch_lists(ip)) is not None}
+        list_nodes = [ip for ip in group_nodes if ip in node_lists]
+        if len(list_nodes) >= 2:
+            all_addrs = set().union(*(set(l.keys()) for l in node_lists.values()))
+            for addr in all_addrs:
+                values = {}
+                for ip in list_nodes:
+                    l = node_lists[ip].get(addr)
+                    values[ip] = None if l is None else (
+                        l["type"], l.get("enabled", True), l.get("comment", ""), _group_names(ip, l.get("groups")))
+                entry = ledger["adlists"].setdefault(addr, {})
+                winner_entry, updated_entry, stale = _pick_winner(list_nodes, values, entry, now_iso)
+                if winner_entry["value"] is not None:
+                    ltype, enabled, comment, names = winner_entry["value"]
+                    for ip in stale:
+                        ids = _group_ids(ip, names, f"adlist '{addr}'")
+                        body = {"address": addr, "type": ltype, "enabled": enabled, "comment": comment, "groups": ids}
+                        exists = addr in node_lists[ip]
+                        result = (_api_put(ip, f"/lists/{urllib.parse.quote(addr, safe='')}", body)
+                                  if exists else _api_post(ip, "/lists", body))
+                        if result is not None:
+                            applied.append(f"adlist '{addr}' → {ip}")
+                            updated_entry[ip] = dict(winner_entry)
+                            changed_nodes.add(ip)
+                ledger["adlists"][addr] = updated_entry
+        _save_ledger(ledger)
+
+    if domains_enabled:
+        step("Fetching domain overrides from every node")
+        node_domains = {ip: d for ip in group_nodes if (d := _fetch_domains(ip)) is not None}
+        dom_nodes = [ip for ip in group_nodes if ip in node_domains]
+        if len(dom_nodes) >= 2:
+            all_keys = set().union(*(set(d.keys()) for d in node_domains.values()))
+            for key in all_keys:
+                dtype, kind, domain = key.split("|", 2)
+                values = {}
+                for ip in dom_nodes:
+                    d = node_domains[ip].get(key)
+                    values[ip] = None if d is None else (
+                        d.get("enabled", True), d.get("comment", ""), _group_names(ip, d.get("groups")))
+                entry = ledger["domains"].setdefault(key, {})
+                winner_entry, updated_entry, stale = _pick_winner(dom_nodes, values, entry, now_iso)
+                if winner_entry["value"] is not None:
+                    enabled, comment, names = winner_entry["value"]
+                    for ip in stale:
+                        ids = _group_ids(ip, names, f"domain '{domain}'")
+                        body = {"domain": domain, "enabled": enabled, "comment": comment, "groups": ids}
+                        exists = key in node_domains[ip]
+                        path_suffix = f"/domains/{dtype}/{kind}"
+                        result = (_api_put(ip, f"{path_suffix}/{urllib.parse.quote(domain, safe='')}", body)
+                                  if exists else _api_post(ip, path_suffix, body))
+                        if result is not None:
+                            applied.append(f"domain '{domain}' ({dtype}/{kind}) → {ip}")
+                            updated_entry[ip] = dict(winner_entry)
+                            changed_nodes.add(ip)
+                ledger["domains"][key] = updated_entry
+        _save_ledger(ledger)
+
+    return applied, verify_failures, changed_nodes
+
+
 def _merge_run(step) -> list:
     """Fetches config from every reachable node, merges each enabled scalar
     path and (if enabled) the dhcp.hosts reservation list, and pushes the
@@ -490,21 +646,35 @@ def _merge_run(step) -> list:
     enabled_paths = [p for p in _SCALAR_PATHS if options.get(p, True)]
     hosts_enabled = options.get(HOSTS_PATH, True)
     client_groups_enabled = options.get(CLIENT_GROUPS_PATH, False)
-    if not enabled_paths and not hosts_enabled and not client_groups_enabled:
+    adlists_enabled = options.get(ADLISTS_PATH, False)
+    domains_enabled = options.get(DOMAINS_PATH, False)
+    if not enabled_paths and not hosts_enabled and not client_groups_enabled and not adlists_enabled and not domains_enabled:
         raise RuntimeError("No settings enabled")
 
-    step(f"Fetching config from {len(PIHOLE_IPS)} node(s)")
+    all_ips = nodes.get_ips()
+    sync_ips = [ip for ip in all_ips if not maintenance.is_under_maintenance(ip)]
+    if len(sync_ips) < len(all_ips):
+        step(f"Skipping node(s) in maintenance mode: {', '.join(ip for ip in all_ips if ip not in sync_ips)}")
+
+    step(f"Fetching config from {len(sync_ips)} node(s)")
     configs = {}
-    for ip in PIHOLE_IPS:
+    for ip in sync_ips:
         cfg = _api_get(ip, "/config")
         if cfg is not None:
             configs[ip] = cfg.get("config", {})
-    nodes = [ip for ip in PIHOLE_IPS if ip in configs]
-    unreachable = [ip for ip in PIHOLE_IPS if ip not in configs]
+    nodes = [ip for ip in sync_ips if ip in configs]
+    unreachable = [ip for ip in sync_ips if ip not in configs]
     if unreachable:
         step(f"Skipping unreachable node(s): {', '.join(unreachable)}")
     if len(nodes) < 2:
         raise RuntimeError("Fewer than 2 Pi-holes reachable — nothing to compare")
+
+    step("Taking pre-replication backup snapshot")
+    from workers import backup  # deferred: backup.py imports this module at its own top level
+    try:
+        backup.take_backup("pre-replication")
+    except Exception as e:
+        step(f"Pre-replication backup snapshot failed (continuing anyway): {e}")
 
     step("Checking default-group/blocklist health on each node")
     health_warnings = []
@@ -581,6 +751,16 @@ def _merge_run(step) -> list:
         applied.extend(g_applied)
         verify_failures.extend(g_verify_failures)
 
+    if adlists_enabled or domains_enabled:
+        step("Reconciling adlists and/or domain overrides")
+        a_applied, a_verify_failures, changed_nodes = _merge_adlists_and_domains(
+            nodes, step, adlists_enabled, domains_enabled)
+        applied.extend(a_applied)
+        verify_failures.extend(a_verify_failures)
+        for ip in changed_nodes:
+            step(f"Triggering gravity update on {ip} so adlist/domain changes take effect")
+            gravity.trigger_gravity(ip)
+
     return applied, verify_failures
 
 
@@ -615,15 +795,21 @@ def _check_drift(step) -> list:
     options = _load_options()
     enabled_paths = [p for p in _SCALAR_PATHS if options.get(p, True)]
     hosts_enabled = options.get(HOSTS_PATH, True)
+    adlists_enabled = options.get(ADLISTS_PATH, False)
+    domains_enabled = options.get(DOMAINS_PATH, False)
 
-    step(f"Fetching config from {len(PIHOLE_IPS)} node(s)")
+    all_ips = nodes.get_ips()
+    drift_ips = [ip for ip in all_ips if not maintenance.is_under_maintenance(ip)]
+    if len(drift_ips) < len(all_ips):
+        step(f"Excluding node(s) in maintenance mode: {', '.join(ip for ip in all_ips if ip not in drift_ips)}")
+    step(f"Fetching config from {len(drift_ips)} node(s)")
     configs = {}
-    for ip in PIHOLE_IPS:
+    for ip in drift_ips:
         cfg = _api_get(ip, "/config")
         if cfg is not None:
             configs[ip] = cfg.get("config", {})
-    nodes = [ip for ip in PIHOLE_IPS if ip in configs]
-    unreachable = [ip for ip in PIHOLE_IPS if ip not in configs]
+    nodes = [ip for ip in drift_ips if ip in configs]
+    unreachable = [ip for ip in drift_ips if ip not in configs]
     findings = [f"{ip}: unreachable" for ip in unreachable]
     if len(nodes) < 2:
         findings.append("Fewer than 2 Pi-holes reachable — nothing to compare")
@@ -644,6 +830,26 @@ def _check_drift(step) -> list:
             findings.append("dhcp.hosts (static reservations) differ between nodes: " +
                              ", ".join(f"{ip}={len(node_hosts[ip])} entries" for ip in nodes))
 
+    if adlists_enabled:
+        node_lists = {ip: l for ip in nodes if (l := _fetch_lists(ip)) is not None}
+        if len(node_lists) >= 2:
+            simplified = {ip: {addr: (l["type"], l.get("enabled", True)) for addr, l in lists.items()}
+                          for ip, lists in node_lists.items()}
+            first = next(iter(simplified.values()))
+            if any(v != first for v in simplified.values()):
+                findings.append("Adlists differ between nodes: " +
+                                 ", ".join(f"{ip}={len(simplified[ip])} entries" for ip in node_lists))
+
+    if domains_enabled:
+        node_domains = {ip: d for ip in nodes if (d := _fetch_domains(ip)) is not None}
+        if len(node_domains) >= 2:
+            simplified = {ip: {k: d.get("enabled", True) for k, d in doms.items()}
+                          for ip, doms in node_domains.items()}
+            first = next(iter(simplified.values()))
+            if any(v != first for v in simplified.values()):
+                findings.append("Domain allow/deny overrides differ between nodes: " +
+                                 ", ".join(f"{ip}={len(simplified[ip])} entries" for ip in node_domains))
+
     return findings
 
 
@@ -652,7 +858,7 @@ def _drift_loop():
         _drift_event.wait()
         _drift_event.clear()
 
-        if len(PIHOLE_IPS) < 2:
+        if len(nodes.get_ips()) < 2:
             _set_drift_status("error", "Only one Pi-hole configured — nothing to compare", [], [])
             continue
 
@@ -688,7 +894,7 @@ def _sync_loop():
 
         source = "manual" if triggered else "auto"
 
-        if len(PIHOLE_IPS) < 2:
+        if len(nodes.get_ips()) < 2:
             if source == "manual":
                 _set_status("error", "Only one Pi-hole configured — nothing to compare", [])
             continue

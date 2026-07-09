@@ -129,6 +129,12 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
       </svg>
       Recovery
     </a>
+    <a href="/backup" class="nav-item {{ 'active' if active_page == 'backup' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/>
+      </svg>
+      Backup
+    </a>
     <a href="/log" class="nav-item {{ 'active' if active_page == 'log' else '' }}">
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
         <path d="M2 3.5h12M2 8h12M2 12.5h8"/>

@@ -97,6 +97,54 @@ replication across nodes, scheduled software updates, and activity logging.
   resolution tests, DHCP config/leases, rate-limiting events) over SSH and
   pulls the report back into fleet-manager's own `/data` volume — browsable
   from the Health page instead of only existing on the node itself.
+- **Adlist & domain allow/deny replication** *(off by default, opt in on the
+  Replication page)* — extends multi-master replication to gravity.db
+  adlist URLs and individual exact/regex domain allow/deny overrides,
+  matched by address/domain rather than raw id (same reasoning as groups &
+  clients — ids are per-node local). This is what actually keeps "is this
+  domain blocked" consistent fleet-wide, which config.toml replication alone
+  never touched. Triggers a gravity update on any node it changes.
+- **Node recovery & rollback now clone adlists/domains too** — both the
+  Recovery page's node clone and the Backup page's rollback restore gravity.db
+  adlists and domain overrides, not just settings/hosts/groups, so a
+  recovered/rolled-back node's subsequent gravity update rebuilds against the
+  right lists instead of whatever it happened to have before.
+- **Notifications** — a generic webhook (`NOTIFY_WEBHOOK_URL`) fires on a node
+  left down after reboot retries are exhausted, a gravity update flagged as a
+  probable partial failure, an upgrade failure, and a post-upgrade health-check
+  failure. One JSON payload shape works with Home Assistant's REST API, ntfy, a
+  Telegram bridge, n8n, or anything else that takes a webhook. Inert unless set.
+- **Post-upgrade health gate** — after an upgrade that looks successful
+  (`pihole -up` exits clean + reboots), the updater runs the same
+  ping→DNS→API health check the monitor uses before advancing the daily
+  round-robin to the next node. A bad release halts the rotation fleet-wide
+  instead of silently rolling across every node one per day; resume manually
+  from the Updater tab once the node is confirmed fixed.
+- **Point-in-time backups & rollback** (Backup tab) — snapshots every node's
+  replication-managed settings, static reservations, groups, client
+  assignments, adlists, and domain overrides to a file. Taken automatically
+  before every replication push, gravity update, and software upgrade, plus
+  on-demand and on an optional daily/weekly/monthly schedule (keep up to 5).
+  Roll back one node or the whole fleet to any saved snapshot with one click.
+- **NetBox import** (Setup tab) — read-only import of VLANs (via their
+  associated Prefix) and static host reservations (via IP Addresses assigned
+  to a device/VM interface with a MAC address) from NetBox's IPAM+DCIM.
+  Gateway and DHCP range aren't modeled in NetBox, so both are a best-effort
+  guess meant to be reviewed after import. Inert unless `NETBOX_URL` is set.
+- **Fleet-wide query log search** (Stats page) — fans a domain/client search
+  out to every node's own query log and merges the results, tagged with
+  which node answered — Pi-hole's own dashboard only ever shows one node.
+- **Per-node maintenance mode** (Health page) — temporarily pauses
+  auto-reboot, DHCP failover enforcement, and replication/gravity/updater
+  auto-rotation for one node, so working on it by hand doesn't get fought by
+  this app's own automation. Always auto-expires — no "leave it on forever"
+  option.
+- **UI-managed node list** (Setup tab) — add/remove Pi-hole nodes from the
+  fleet without a container recreate; `PIHOLE_IPS` only seeds the list once
+  on first boot, after which the UI is authoritative.
+- **Optional admin login** (Setup tab) — off by default; when enabled,
+  requires a password (session-based) for every page and API call. See
+  [Security](#security) below.
 
 ## Configuration
 
@@ -133,6 +181,11 @@ config file to edit.
 | `MONITOR_REBOOT_AFTER_MINUTES` | `10` | Minutes between SSH reboot retries |
 | `MONITOR_UPTIME_INTERVAL` | `300` | Seconds between uptime refresh + VIP master re-detection |
 | `MONITOR_MAX_DIAG_REPORTS` | `3` | Saved diagnostics reports kept per node (oldest pruned automatically) |
+| `ADMIN_PASSWORD` | *(optional)* | Enables admin login when set — normally written automatically by the Setup tab's switch, not hand-edited |
+| `NOTIFY_WEBHOOK_URL` | *(optional)* | Generic webhook for node-down/gravity-drop/upgrade-failure/drift-check alerts; blank disables notifications entirely |
+| `UPDATER_POST_UPGRADE_WAIT_SECS` | `90` | Seconds to wait after an upgrade+reboot before running the post-upgrade health check |
+| `NETBOX_URL` / `NETBOX_TOKEN` | *(optional)* | NetBox base URL + API token for the Setup tab's VLAN/host import; blank disables it entirely |
+| `NETBOX_VERIFY_SSL` | `false` | Set `true` only if NetBox has a valid (non-self-signed) TLS cert |
 | `TZ` | `UTC` | Container timezone |
 
 Node health monitoring needs `ping` and `dig` inside the container plus the
@@ -211,12 +264,20 @@ pre-installed on the targets.
 
 ## Security
 
-This app has **no built-in authentication** — every page and `/api/...`
-endpoint (including DHCP/DNS config pushes to your Pi-hole nodes) is open
-to anyone who can reach the container. It's designed to run on a trusted
-internal network, not to be exposed to the internet. If you need remote
-access, put it behind a reverse proxy or VPN that handles auth rather than
-exposing the container's port directly.
+Admin login is **off by default** — every page and `/api/...` endpoint
+(including DHCP/DNS config pushes to your Pi-hole nodes) is open to anyone
+who can reach the container unless you turn it on. Enable it from the Setup
+tab's "Admin Login" switch: it prompts for a password once, then requires
+that password (session-based — log in once per browser) for everything
+except `/login` itself and `/api/known-hosts` (deliberately exempted so
+other apps, e.g. Network-Health, can keep polling it for Pi-hole DHCP
+awareness without a session).
+
+This app is still designed to run on a trusted internal network, not to be
+exposed to the internet — admin login is meant to stop casual access on a
+shared LAN, not to withstand a hostile one. If you need remote access, put
+it behind a reverse proxy or VPN that handles auth rather than exposing the
+container's port directly.
 
 ## Development
 
@@ -231,10 +292,19 @@ PIHOLE_IPS=<node-ip> PIHOLE_ADMIN_PASSWORD=<password> python app.py
 app.py              Flask routes (pages + JSON API)
 workers/
   store.py           VLAN + host reservation persistence
+  nodes.py           UI-managed fleet node list (seeds from PIHOLE_IPS once)
   primary_dhcp.py     Reads/writes Pi-hole's own native DHCP scope
   pihole_push.py       Renders + pushes dnsmasq.d config over SSH
-  replication.py       Multi-master settings/scope sync
-  updater.py           Scheduled + manual Pi-hole upgrades
+  replication.py       Multi-master settings/scope/adlist/domain sync
+  updater.py           Scheduled + manual Pi-hole upgrades, post-upgrade health gate
+  gravity.py           Staggered blocklist (gravity) updates
+  backup.py            Point-in-time snapshots + rollback
+  recovery.py          One-way clone a healthy node onto a target
+  netbox_import.py    Read-only VLAN/host import from NetBox
+  query_log.py         Fleet-wide query log search
+  maintenance.py       Per-node maintenance mode (pauses other workers)
+  auth.py              Optional admin login gate
+  notify.py            Generic outbound webhook
   setup.py             SSH trust bootstrap
   activity_log.py      Unified event log
 templates/           Jinja2 templates (one per tab)

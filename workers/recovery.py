@@ -15,6 +15,7 @@ Reuses replication.py's and pihole_push.py's own API/SSH helpers directly
 same HTTP/SSH plumbing a third time — this is all one codebase, not a
 library boundary."""
 import threading
+import urllib.parse
 from collections import deque
 from datetime import datetime
 
@@ -93,6 +94,56 @@ def _clone_groups_and_clients(source: str, target: str, step) -> list:
     return errors
 
 
+def _clone_adlists_and_domains(source: str, target: str, step) -> list:
+    """Clones gravity.db adlists and domain allow/deny overrides — without
+    this, a recovered node keeps whatever (probably empty or stale) adlist
+    set it had before, and the gravity update triggered right after cloning
+    would rebuild against the WRONG lists instead of matching the rest of
+    the fleet."""
+    errors = []
+    src_groups = replication._fetch_groups(source) or {}
+    tgt_groups = replication._fetch_groups(target) or {}
+    id_to_name_src = {g["id"]: n for n, g in src_groups.items()}
+    name_to_id_tgt = {n: g["id"] for n, g in tgt_groups.items()}
+
+    def _translate(group_ids):
+        names = [id_to_name_src.get(gid) for gid in (group_ids or [])]
+        return [name_to_id_tgt[n] for n in names if n and n in name_to_id_tgt]
+
+    src_lists = replication._fetch_lists(source)
+    tgt_lists = replication._fetch_lists(target) or {}
+    if src_lists is None:
+        errors.append(f"could not read adlists from {source}")
+    else:
+        for addr, l in src_lists.items():
+            body = {"address": addr, "type": l["type"], "enabled": l.get("enabled", True),
+                     "comment": l.get("comment", ""), "groups": _translate(l.get("groups"))}
+            exists = addr in tgt_lists
+            result = (replication._api_put(target, f"/lists/{urllib.parse.quote(addr, safe='')}", body)
+                       if exists else replication._api_post(target, "/lists", body))
+            if result is None:
+                errors.append(f"failed to set adlist '{addr}' on {target}")
+        step(f"Cloned {len(src_lists)} adlist(s)")
+
+    src_domains = replication._fetch_domains(source)
+    tgt_domains = replication._fetch_domains(target) or {}
+    if src_domains is None:
+        errors.append(f"could not read domain overrides from {source}")
+    else:
+        for key, d in src_domains.items():
+            dtype, kind, domain = key.split("|", 2)
+            body = {"domain": domain, "enabled": d.get("enabled", True),
+                     "comment": d.get("comment", ""), "groups": _translate(d.get("groups"))}
+            exists = key in tgt_domains
+            path_suffix = f"/domains/{dtype}/{kind}"
+            result = (replication._api_put(target, f"{path_suffix}/{urllib.parse.quote(domain, safe='')}", body)
+                       if exists else replication._api_post(target, path_suffix, body))
+            if result is None:
+                errors.append(f"failed to set domain override '{domain}' on {target}")
+        step(f"Cloned {len(src_domains)} domain override(s)")
+    return errors
+
+
 def _clone_vlan_push(target: str, step) -> list:
     vlans = store.list_vlans()
     errors = []
@@ -131,6 +182,7 @@ def _do_clone(source, target):
         errors = []
         errors += _clone_settings(source, target, step)
         errors += _clone_groups_and_clients(source, target, step)
+        errors += _clone_adlists_and_domains(source, target, step)
         errors += _clone_vlan_push(target, step)
 
         step("Triggering gravity update on target")

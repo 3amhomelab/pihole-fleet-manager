@@ -4,25 +4,90 @@ on top of Pi-hole's single built-in scope, config replication, software
 auto-updates, and node health monitoring (ping/DNS/API checks, uptime, VIP
 master detection, auto-heal escalation), all across every Pi-hole node."""
 import os
+import threading
 from datetime import datetime
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, redirect, render_template, request, session
 
 from workers import (
-    activity_log, dhcp_failover, external_dhcp, gravity, lease_conflicts,
-    monitor, pihole_push, primary_dhcp, recovery, replication, setup, stats,
-    store, updater,
+    activity_log, auth, backup, dhcp_failover, external_dhcp, gravity,
+    lease_conflicts, maintenance, monitor, netbox_import, nodes, notify,
+    pihole_push, primary_dhcp, query_log, recovery, replication, setup,
+    stats, store, updater,
 )
 
 PORT        = int(os.environ.get("PORT", "8080"))
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 
 app = Flask(__name__)
+app.secret_key = auth.get_secret_key()
+
+# Routes reachable with no session even when admin login is enabled: the
+# login page/action itself, and /api/known-hosts, which other apps on the
+# network (e.g. Network-Health) poll directly for Pi-hole DHCP awareness —
+# gating it would silently break that cross-service integration.
+_AUTH_EXEMPT = {"/login", "/api/known-hosts"}
+
+
+@app.before_request
+def _require_login():
+    if not auth.is_enabled():
+        return None
+    if request.path in _AUTH_EXEMPT or request.path.startswith("/static/"):
+        return None
+    if session.get("authenticated"):
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": "Login required"}), 401
+    return redirect("/login")
 
 
 @app.context_processor
 def inject_globals():
     return {"app_version": APP_VERSION}
+
+
+# --- Admin login ---
+
+@app.route("/login", methods=["GET", "POST"])
+def page_login():
+    if request.method == "GET":
+        return render_template("login.html", error=None)
+    password = request.form.get("password", "")
+    if auth.check_password(password):
+        session["authenticated"] = True
+        session.permanent = True
+        return redirect("/")
+    return render_template("login.html", error="Incorrect password")
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
+@app.route("/api/auth/status")
+def api_auth_status():
+    return jsonify({"enabled": auth.is_enabled(), "authenticated": bool(session.get("authenticated"))})
+
+
+@app.route("/api/auth/enable", methods=["POST"])
+def api_auth_enable():
+    data = request.get_json(silent=True) or {}
+    password = data.get("password", "")
+    ok, error = auth.enable(password)
+    if not ok:
+        return jsonify({"ok": False, "error": error}), 400
+    session["authenticated"] = True
+    session.permanent = True
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/disable", methods=["POST"])
+def api_auth_disable():
+    auth.disable()
+    return jsonify({"ok": True})
 
 
 # --- Pages ---
@@ -200,7 +265,7 @@ def api_push_preview():
 
 @app.route("/api/vlans/import/preview")
 def api_vlans_import_preview():
-    ip = request.args.get("ip") or (pihole_push.PIHOLE_IPS[0] if pihole_push.PIHOLE_IPS else None)
+    ip = request.args.get("ip") or (nodes.get_ips()[0] if nodes.get_ips() else None)
     if not ip:
         return jsonify({"ok": False, "error": "No Pi-hole IPs configured"}), 400
     content, error = pihole_push.fetch_remote_conf(ip)
@@ -223,10 +288,30 @@ def api_vlans_import_preview():
     return jsonify({"ok": True, "ip": ip, "vlans": parsed})
 
 
+@app.route("/api/netbox/preview")
+def api_netbox_preview():
+    if not netbox_import.configured():
+        return jsonify({"ok": False, "error": "NETBOX_URL/NETBOX_TOKEN not configured"}), 400
+    candidates, error = netbox_import.preview(store.list_vlans())
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    return jsonify({"ok": True, "vlans": candidates})
+
+
+@app.route("/api/netbox/import", methods=["POST"])
+def api_netbox_import_apply():
+    data = request.get_json(silent=True) or {}
+    vlans = data.get("vlans") or []
+    if not vlans:
+        return jsonify({"ok": False, "error": "No VLANs selected"}), 400
+    imported, errors = netbox_import.apply_import(vlans)
+    return jsonify({"ok": not errors, "imported": imported, "errors": errors})
+
+
 @app.route("/api/vlans/import", methods=["POST"])
 def api_vlans_import_apply():
     data = request.get_json(silent=True) or {}
-    ip  = data.get("ip") or (pihole_push.PIHOLE_IPS[0] if pihole_push.PIHOLE_IPS else None)
+    ip  = data.get("ip") or (nodes.get_ips()[0] if nodes.get_ips() else None)
     ids = data.get("ids") or []
     if not ip:
         return jsonify({"ok": False, "error": "No Pi-hole IPs configured"}), 400
@@ -310,6 +395,69 @@ def api_updater_upgrade(ip):
     return jsonify({"ok": ok, "message": msg})
 
 
+@app.route("/api/updater/halted")
+def api_updater_halted():
+    return jsonify(updater.get_halted())
+
+
+@app.route("/api/updater/resume", methods=["POST"])
+def api_updater_resume():
+    updater.resume_rotation()
+    return jsonify({"ok": True})
+
+
+# --- Point-in-time backups + rollback ---
+
+@app.route("/backup")
+def page_backup():
+    return render_template("backup.html", active_page="backup")
+
+
+@app.route("/api/backup/settings")
+def api_backup_settings():
+    return jsonify(backup.get_settings())
+
+
+@app.route("/api/backup/settings", methods=["POST"])
+def api_backup_set_settings():
+    data = request.get_json(silent=True) or {}
+    try:
+        keep = int(data.get("keep", 5))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "keep must be a number"}), 400
+    return jsonify(backup.set_settings(keep, data.get("schedule", "off")))
+
+
+@app.route("/api/backup/list")
+def api_backup_list():
+    return jsonify({"backups": backup.list_backups()})
+
+
+@app.route("/api/backup/status")
+def api_backup_status():
+    return jsonify(backup.get_status())
+
+
+@app.route("/api/backup/take", methods=["POST"])
+def api_backup_take():
+    threading.Thread(target=backup.take_backup, args=("manual",), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/backup/<name>", methods=["DELETE"])
+def api_backup_delete(name):
+    ok, error = backup.delete_backup(name)
+    return jsonify({"ok": ok, "error": error})
+
+
+@app.route("/api/backup/<name>/rollback", methods=["POST"])
+def api_backup_rollback(name):
+    data = request.get_json(silent=True) or {}
+    target_ip = data.get("target_ip") or None
+    backup.rollback(name, target_ip)
+    return jsonify({"ok": True})
+
+
 # --- Staggered gravity (blocklist) updates ---
 
 @app.route("/api/gravity")
@@ -332,6 +480,13 @@ def api_stats():
     except ValueError:
         count = 10
     return jsonify(stats.get_fleet_stats(top_count=count))
+
+
+@app.route("/api/query-log/search")
+def api_query_log_search():
+    domain = request.args.get("domain", "")
+    client = request.args.get("client", "")
+    return jsonify(query_log.search(domain, client))
 
 
 # --- Stale-lease / static-reservation conflict guard ---
@@ -366,7 +521,7 @@ def api_recovery_clone():
     target = data.get("target", "")
     if not source or not target:
         return jsonify({"ok": False, "error": "source and target required"}), 400
-    if source not in pihole_push.PIHOLE_IPS or target not in pihole_push.PIHOLE_IPS:
+    if source not in nodes.get_ips() or target not in nodes.get_ips():
         return jsonify({"ok": False, "error": "source/target must be configured Pi-hole IPs"}), 400
     recovery.clone_node(source, target)
     return jsonify({"ok": True})
@@ -418,7 +573,7 @@ def api_monitor_set_interval():
 
 @app.route("/api/monitor/<path:ip>/reboot", methods=["POST"])
 def api_monitor_reboot(ip):
-    if ip not in monitor.PIHOLE_IPS:
+    if ip not in nodes.get_ips():
         return jsonify({"ok": False, "error": "Not a configured Pi-hole node"}), 400
     monitor.reboot(ip)
     return jsonify({"ok": True})
@@ -455,6 +610,29 @@ def api_monitor_clear():
     return jsonify({"ok": True})
 
 
+# --- Per-node maintenance mode ---
+
+@app.route("/api/maintenance")
+def api_maintenance_state():
+    return jsonify({"nodes": maintenance.get_state()})
+
+
+@app.route("/api/maintenance/<path:ip>", methods=["POST"])
+def api_maintenance_set(ip):
+    data = request.get_json(silent=True) or {}
+    try:
+        minutes = int(data.get("minutes", 60))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "minutes must be a number"}), 400
+    return jsonify(maintenance.set_maintenance(ip, minutes))
+
+
+@app.route("/api/maintenance/<path:ip>", methods=["DELETE"])
+def api_maintenance_clear(ip):
+    maintenance.clear_maintenance(ip)
+    return jsonify({"ok": True})
+
+
 # --- Cross-service: DHCP config/leases + ip/mac->hostname lookup, for other
 # apps (e.g. Network-Health) that need Pi-hole DHCP awareness without
 # importing this app's internals directly ---
@@ -471,7 +649,7 @@ def api_known_hosts():
                 hosts_by_ip[h["ip"]] = {"ip": h["ip"], "mac": h.get("mac", ""), "hostname": h.get("hostname", "")}
     return jsonify({
         "updated": datetime.utcnow().isoformat(),
-        "pihole_ips": pihole_push.PIHOLE_IPS,
+        "pihole_ips": nodes.get_ips(),
         "vip": monitor.PIHOLE_VIP,
         "source": "fleet-manager",
         "config": primary_dhcp.get_config(),
@@ -493,6 +671,28 @@ def api_log():
 
 
 # --- SSH trust setup ---
+
+@app.route("/api/nodes")
+def api_nodes_list():
+    return jsonify({"ips": nodes.get_ips()})
+
+
+@app.route("/api/nodes", methods=["POST"])
+def api_nodes_add():
+    data = request.get_json(silent=True) or {}
+    ips, error = nodes.add_ip(data.get("ip", ""))
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    return jsonify({"ok": True, "ips": ips})
+
+
+@app.route("/api/nodes/<path:ip>", methods=["DELETE"])
+def api_nodes_remove(ip):
+    ips, error = nodes.remove_ip(ip)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    return jsonify({"ok": True, "ips": ips})
+
 
 @app.route("/api/setup/status")
 def api_setup_status():
@@ -531,4 +731,5 @@ if __name__ == "__main__":
     gravity.start()
     external_dhcp.start()
     monitor.start()
+    backup.start()
     app.run(host="0.0.0.0", port=PORT)

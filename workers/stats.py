@@ -15,7 +15,8 @@ import threading
 
 import requests
 
-PIHOLE_IPS  = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
+from workers import nodes
+
 PIHOLE_PASS = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
 
 _sid_cache = {}
@@ -77,8 +78,9 @@ def _merge_client_counts(per_node, key, top_count):
 
 
 def get_fleet_stats(top_count: int = 10) -> dict:
+    ips = nodes.get_ips()
     per_node = {}
-    for ip in PIHOLE_IPS:
+    for ip in ips:
         summary = _api_get(ip, "/stats/summary")
         domains = _api_get(ip, f"/stats/top_domains?count={top_count}")
         clients = _api_get(ip, f"/stats/top_clients?count={top_count}")
@@ -104,7 +106,7 @@ def get_fleet_stats(top_count: int = 10) -> dict:
     totals["percent_blocked"] = round(totals["blocked"] / totals["total"] * 100, 2) if totals["total"] else 0.0
 
     return {
-        "nodes": {ip: {"reachable": per_node[ip]["reachable"], "summary": per_node[ip]["summary"]} for ip in PIHOLE_IPS},
+        "nodes": {ip: {"reachable": per_node[ip]["reachable"], "summary": per_node[ip]["summary"]} for ip in ips},
         "totals": totals,
         "top_domains": _merge_domain_counts(reachable_nodes, "domains", top_count),
         "top_clients": _merge_client_counts(reachable_nodes, "clients", top_count),

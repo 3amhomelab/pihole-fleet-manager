@@ -13,9 +13,8 @@ import threading
 
 import requests
 
-from workers import activity_log, primary_dhcp, store
+from workers import activity_log, nodes, primary_dhcp, store
 
-PIHOLE_IPS  = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
 PIHOLE_PASS = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
 
 _sid_cache = {}
@@ -99,7 +98,7 @@ def check_conflicts() -> list:
         return []
 
     conflicts = []
-    for ip in PIHOLE_IPS:
+    for ip in nodes.get_ips():
         leases = _api_get(ip, "/dhcp/leases")
         if leases is None:
             continue
@@ -117,7 +116,7 @@ def check_conflicts() -> list:
 def clear_conflict(node: str, leased_ip: str) -> tuple:
     """Clears the stale lease on the given node and reloads DNS/DHCP so the
     reservation actually takes effect on the client's next renewal."""
-    if node not in PIHOLE_IPS:
+    if node not in nodes.get_ips():
         return False, "Unknown node"
     if not _api_delete(node, f"/dhcp/leases/{leased_ip}"):
         return False, "Could not clear lease via API"

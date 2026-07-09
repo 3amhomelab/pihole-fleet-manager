@@ -27,7 +27,7 @@ from datetime import datetime
 
 import requests
 
-from workers import activity_log
+from workers import activity_log, nodes
 
 SOURCE_KIND   = os.environ.get("EXTERNAL_DHCP_SOURCE", "").strip().lower()  # "" (disabled) or "unifi"
 POLL_SECS     = int(os.environ.get("EXTERNAL_DHCP_POLL_SECS", "300"))
@@ -38,7 +38,6 @@ UNIFI_USER     = os.environ.get("UNIFI_USER", "").strip()
 UNIFI_PASSWORD = os.environ.get("UNIFI_PASSWORD", "")
 UNIFI_SITE     = os.environ.get("UNIFI_SITE", "default").strip()
 
-PIHOLE_IPS  = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
 PIHOLE_PASS = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
 
 _pihole_sid_cache = {}
@@ -196,7 +195,7 @@ def sync_now() -> tuple:
     previously_published = _load_previous_ips()
     newly_published = {c["ip"] for c in clients if _valid_ip(c["ip"])}
     failed = []
-    for ip in PIHOLE_IPS:
+    for ip in nodes.get_ips():
         current = _pihole_api_get(ip, "/config/dns/hosts")
         if current is None:
             failed.append(ip)

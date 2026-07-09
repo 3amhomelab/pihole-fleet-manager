@@ -24,9 +24,8 @@ from datetime import datetime
 
 import requests
 
-from workers import activity_log
+from workers import activity_log, maintenance, nodes
 
-PIHOLE_IPS  = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
 PIHOLE_PASS = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
 PIHOLE_VIP  = os.environ.get("PIHOLE_VIP", "").strip()
 SSH_USER    = os.environ.get("PIHOLE_SSH_USER", "root")
@@ -93,7 +92,7 @@ def get_state() -> dict:
 # --- VIP master detection (same signal keepalived itself uses for DNS) ---
 
 def _detect_vip_master() -> str | None:
-    for ip in PIHOLE_IPS:
+    for ip in nodes.get_ips():
         try:
             proc = subprocess.run(
                 ["ssh", *_SSH_OPTS, f"{SSH_USER}@{ip}", f"ip addr show | grep -q '{PIHOLE_VIP}/' && echo yes"],
@@ -184,7 +183,8 @@ def _tick(log_fn) -> None:
     state = _load_state()
     if not state["enabled"]:
         return
-    if not PIHOLE_VIP or not PIHOLE_IPS:
+    ips = nodes.get_ips()
+    if not PIHOLE_VIP or not ips:
         log_fn("PIHOLE_VIP or PIHOLE_IPS not configured — skipping")
         return
 
@@ -202,7 +202,10 @@ def _tick(log_fn) -> None:
 
     # Re-assert every tick, not just on a detected change — corrects a node
     # that was manually re-enabled, or missed a previous patch attempt.
-    for ip in PIHOLE_IPS:
+    for ip in ips:
+        if maintenance.is_under_maintenance(ip):
+            log_fn(f"{ip}: in maintenance mode, skipping enforcement")
+            continue
         want_active = (ip == master)
         current = _get_dhcp_active(ip)
         if current is None:

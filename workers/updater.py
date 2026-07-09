@@ -14,9 +14,8 @@ from datetime import datetime, timedelta, time as dtime, timezone
 
 import requests
 
-from workers import activity_log
+from workers import activity_log, backup, maintenance, monitor, nodes, notify
 
-PIHOLE_IPS      = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
 PIHOLE_PASS     = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
 SSH_USER        = os.environ.get("PIHOLE_SSH_USER", "root")
 SSH_KEY         = os.environ.get("PIHOLE_SSH_KEY", "/data/ssh/pihole_key")
@@ -34,7 +33,8 @@ _sid_lock   = threading.Lock()
 _state_lock = threading.Lock()
 _node_state = {}       # ip -> {version_current, version_latest, version_update_available, last_upgraded, history: [...]}
 _upgrade_running = {}  # ip -> bool
-_rotation = {"last_day": -1, "next_idx": 0}
+_rotation = {"last_day": -1, "next_idx": 0, "halted": False, "halted_reason": ""}
+POST_UPGRADE_WAIT_SECS = int(os.environ.get("UPDATER_POST_UPGRADE_WAIT_SECS", "90"))
 
 
 def _now_iso():
@@ -100,7 +100,7 @@ def _load_state():
     try:
         with open(STATE_FILE) as f:
             data = json.load(f)
-        _rotation = data.get("rotation", {"last_day": -1, "next_idx": 0})
+        _rotation = data.get("rotation", {"last_day": -1, "next_idx": 0, "halted": False, "halted_reason": ""})
         with _state_lock:
             _node_state.update(data.get("nodes", {}))
     except Exception:
@@ -139,18 +139,45 @@ def _record(ip, status, reason=""):
 
     if status == "upgraded":
         activity_log.log("updater", f"{ip} upgraded and rebooted")
+    elif status == "upgrade_health_failed":
+        activity_log.log("updater", f"{ip} upgraded but failed its post-upgrade health check" + (f": {reason}" if reason else ""), level="error")
+        notify.send("updater_health_failed", f"{ip} upgraded but failed its post-upgrade health check" + (f": {reason}" if reason else "") + " — auto-updater rotation halted", "error")
     elif status == "failed":
         activity_log.log("updater", f"{ip} upgrade failed" + (f": {reason}" if reason else ""), level="error")
+        notify.send("updater_failed", f"{ip} upgrade failed" + (f": {reason}" if reason else "") + " — auto-updater rotation halted", "error")
+
+
+def _post_upgrade_check(ip: str) -> tuple:
+    """Waits for the post-upgrade reboot to land, then runs the same
+    confirm-before-declaring-down probe the health monitor itself uses. A
+    bad release can look like a clean `pihole -up` exit and still leave DNS
+    broken — this is what stops that from silently rolling across every
+    node in the fleet, one per day, via the round-robin below."""
+    time.sleep(POST_UPGRADE_WAIT_SECS)
+    result = monitor.check_node_health(ip)
+    return result["ok"], result.get("reason", "")
+
+
+def get_halted() -> dict:
+    return {"halted": bool(_rotation.get("halted")), "reason": _rotation.get("halted_reason", "")}
+
+
+def resume_rotation() -> None:
+    _rotation["halted"] = False
+    _rotation["halted_reason"] = ""
+    _save_state()
+    activity_log.log("updater", "Auto-updater rotation resumed manually")
 
 
 def _next_auto_time(ip: str) -> str | None:
     """When the daily round-robin will next reach this node, given the
     current rotation position — one node's turn comes up per day at
     UPDATER_HOUR UTC, regardless of whether it ends up needing an upgrade."""
-    if ip not in PIHOLE_IPS:
+    ips = nodes.get_ips()
+    if ip not in ips:
         return None
-    n = len(PIHOLE_IPS)
-    idx = PIHOLE_IPS.index(ip)
+    n = len(ips)
+    idx = ips.index(ip)
     next_idx = _rotation.get("next_idx", 0) % n
     slots_until = (idx - next_idx) % n
 
@@ -166,7 +193,7 @@ def _next_auto_time(ip: str) -> str | None:
 def get_state() -> dict:
     with _state_lock:
         result = {}
-        for ip in PIHOLE_IPS:
+        for ip in nodes.get_ips():
             node = dict(_node_state.get(ip, {"history": []}))
             node["upgrade_running"] = bool(_upgrade_running.get(ip))
             node["next_auto"] = _next_auto_time(ip)
@@ -177,6 +204,11 @@ def get_state() -> dict:
 # --- Upgrade execution ---
 
 def _run_upgrade(ip) -> tuple:
+    try:
+        backup.take_backup("pre-upgrade")
+    except Exception as e:
+        print(f"[updater] pre-upgrade backup snapshot failed (continuing anyway): {e}")
+
     reason = ""
     for attempt in range(UPGRADE_RETRIES):
         try:
@@ -213,6 +245,10 @@ def _do_upgrade(ip):
     _upgrade_running[ip] = True
     try:
         status, reason = _run_upgrade(ip)
+        if status == "upgraded":
+            healthy, health_reason = _post_upgrade_check(ip)
+            if not healthy:
+                status, reason = "upgrade_health_failed", health_reason
         _record(ip, status, reason)
         version = _get_version(ip)
         if version:
@@ -223,7 +259,7 @@ def _do_upgrade(ip):
 
 
 def trigger_upgrade(ip: str) -> tuple:
-    if ip not in PIHOLE_IPS:
+    if ip not in nodes.get_ips():
         return False, "Invalid target"
     if _upgrade_running.get(ip):
         return False, "Upgrade already in progress"
@@ -237,7 +273,7 @@ def trigger_upgrade(ip: str) -> tuple:
 
 def _poll_versions_loop():
     while True:
-        for ip in PIHOLE_IPS:
+        for ip in nodes.get_ips():
             version = _get_version(ip)
             if version:
                 with _state_lock:
@@ -252,12 +288,21 @@ def _updater_loop():
     while True:
         now   = datetime.utcnow()
         today = now.timetuple().tm_yday
+        ips = nodes.get_ips()
 
-        if now.hour == UPDATER_HOUR and today != _rotation["last_day"] and PIHOLE_IPS:
+        if now.hour == UPDATER_HOUR and today != _rotation["last_day"] and ips and not _rotation.get("halted"):
             _rotation["last_day"] = today
-            idx    = _rotation.get("next_idx", 0) % len(PIHOLE_IPS)
-            target = PIHOLE_IPS[idx]
-            print(f"[updater] Slot {idx+1}/{len(PIHOLE_IPS)}: checking {target}")
+            idx    = _rotation.get("next_idx", 0) % len(ips)
+            target = ips[idx]
+
+            if maintenance.is_under_maintenance(target):
+                print(f"[updater] Slot {idx+1}/{len(ips)}: {target} is in maintenance mode — skipping, will retry next cycle")
+                _rotation["next_idx"] = (idx + 1) % len(ips)
+                _save_state()
+                time.sleep(60)
+                continue
+
+            print(f"[updater] Slot {idx+1}/{len(ips)}: checking {target}")
 
             _upgrade_running[target] = True
             try:
@@ -267,7 +312,7 @@ def _updater_loop():
                         _node_state.setdefault(target, {"history": []}).update(version)
                 else:
                     print(f"[updater] {target} API not responding — skipping today, will retry next cycle")
-                    _rotation["next_idx"] = (idx + 1) % len(PIHOLE_IPS)
+                    _rotation["next_idx"] = (idx + 1) % len(ips)
                     _save_state()
                     _upgrade_running[target] = False
                     time.sleep(60)
@@ -276,15 +321,28 @@ def _updater_loop():
                 if _is_up_to_date(target):
                     print(f"[updater] {target} already up to date — skipping")
                     _record(target, "up_to_date")
+                    _rotation["next_idx"] = (idx + 1) % len(ips)
                 else:
                     status, reason = _run_upgrade(target)
+                    if status == "upgraded":
+                        healthy, health_reason = _post_upgrade_check(target)
+                        if not healthy:
+                            status, reason = "upgrade_health_failed", health_reason
                     _record(target, status, reason)
                     version = _get_version(target)
                     if version:
                         with _state_lock:
                             _node_state.setdefault(target, {"history": []}).update(version)
 
-                _rotation["next_idx"] = (idx + 1) % len(PIHOLE_IPS)
+                    if status in ("failed", "upgrade_health_failed"):
+                        # Don't advance the rotation — a bad release must not silently
+                        # roll on to the next node the following day. Requires a manual
+                        # "Resume rotation" once the node is confirmed fixed.
+                        _rotation["halted"] = True
+                        _rotation["halted_reason"] = f"{target}: {status}" + (f" ({reason})" if reason else "")
+                    else:
+                        _rotation["next_idx"] = (idx + 1) % len(ips)
+
                 _save_state()
             finally:
                 _upgrade_running[target] = False

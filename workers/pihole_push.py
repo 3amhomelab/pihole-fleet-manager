@@ -12,10 +12,9 @@ from datetime import datetime
 
 import requests
 
-from workers import activity_log, hostnames, primary_dhcp, store, validate
+from workers import activity_log, hostnames, nodes, primary_dhcp, store, validate
 
 # --- Config ---
-PIHOLE_IPS   = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
 PIHOLE_PASS  = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
 SSH_USER     = os.environ.get("PIHOLE_SSH_USER", "root")
 SSH_KEY      = os.environ.get("PIHOLE_SSH_KEY", "/root/.ssh/pihole_key")
@@ -318,7 +317,8 @@ def _push_loop():
         _event.wait()
         _event.clear()
 
-        if not PIHOLE_IPS:
+        ips = nodes.get_ips()
+        if not ips:
             _set_status("error", "No PIHOLE_IPS configured", [])
             continue
 
@@ -345,7 +345,7 @@ def _push_loop():
             hosts_by_vlan = _vlan_hosts_with_dynamic(vlans, leases)
 
             failed = []
-            for ip in PIHOLE_IPS:
+            for ip in ips:
                 step(f"Writing {CONF_PATH} to {ip}")
                 ok, err = _ssh_write_file(ip, content)
                 if not ok:
@@ -381,8 +381,8 @@ def _push_loop():
                 activity_log.log("push", f"VLAN config push failed: {'; '.join(failed)}", level="error")
             else:
                 step("Push complete — all nodes updated")
-                _set_status("success", f"Pushed to {', '.join(PIHOLE_IPS)}", log)
-                activity_log.log("push", f"VLAN config pushed to {', '.join(PIHOLE_IPS)}")
+                _set_status("success", f"Pushed to {', '.join(ips)}", log)
+                activity_log.log("push", f"VLAN config pushed to {', '.join(ips)}")
         except Exception as e:
             _set_status("error", str(e), list(log))
             activity_log.log("push", f"VLAN config push error: {e}", level="error")

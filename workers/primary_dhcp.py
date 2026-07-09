@@ -10,11 +10,15 @@ import threading
 
 import requests
 
-from workers import activity_log, replication
+from workers import activity_log, nodes, replication
 
-PIHOLE_IPS      = [ip.strip() for ip in os.environ.get("PIHOLE_IPS", "").split(",") if ip.strip()]
-PIHOLE_API_HOST = PIHOLE_IPS[0] if PIHOLE_IPS else ""
 PIHOLE_PASS     = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
+
+
+def _primary_host() -> str:
+    ips = nodes.get_ips()
+    return ips[0] if ips else ""
+
 
 _sid_cache = {}
 _sid_lock  = threading.Lock()
@@ -79,7 +83,7 @@ def _api_patch(ip, path, body):
 # --- Reservation CRUD (writes to the primary node only) ---
 
 def get_config(ip: str = None) -> dict:
-    ip = ip or PIHOLE_API_HOST
+    ip = ip or _primary_host()
     if not ip:
         return {}
     data = _api_get(ip, "/config/dhcp")
@@ -90,7 +94,7 @@ def get_leases() -> list:
     """Active DHCP leases merged across every node (each Pi-hole runs its own
     DHCP server and only knows the leases it personally handed out)."""
     merged = {}
-    for node_ip in PIHOLE_IPS:
+    for node_ip in nodes.get_ips():
         node_leases = (_api_get(node_ip, "/dhcp/leases") or {}).get("leases", [])
         for lease in node_leases:
             key = lease.get("ip") or lease.get("hwaddr")
@@ -114,7 +118,7 @@ def get_reservations(ip: str = None) -> list:
 
 
 def add_or_update_reservation(mac: str, ip: str, hostname: str = "") -> tuple:
-    full = _api_get(PIHOLE_API_HOST, "/config")
+    full = _api_get(_primary_host(), "/config")
     if not full:
         return False, "Failed to fetch config from Pi-hole"
 
@@ -129,7 +133,7 @@ def add_or_update_reservation(mac: str, ip: str, hostname: str = "") -> tuple:
     new_hosts.append(new_entry)
     dhcp["hosts"] = new_hosts
 
-    result = _api_patch(PIHOLE_API_HOST, "/config", {"config": {"dhcp": dhcp}})
+    result = _api_patch(_primary_host(), "/config", {"config": {"dhcp": dhcp}})
     if result is None:
         return False, "PATCH to Pi-hole failed"
     verb = "Updated" if is_update else "Added"
@@ -139,7 +143,7 @@ def add_or_update_reservation(mac: str, ip: str, hostname: str = "") -> tuple:
 
 
 def delete_reservation(ip: str) -> tuple:
-    full = _api_get(PIHOLE_API_HOST, "/config")
+    full = _api_get(_primary_host(), "/config")
     if not full:
         return False, "Failed to fetch config from Pi-hole"
 
@@ -151,7 +155,7 @@ def delete_reservation(ip: str) -> tuple:
         return False, f"No static reservation found for {ip}"
 
     dhcp["hosts"] = new_hosts
-    result = _api_patch(PIHOLE_API_HOST, "/config", {"config": {"dhcp": dhcp}})
+    result = _api_patch(_primary_host(), "/config", {"config": {"dhcp": dhcp}})
     if result is None:
         return False, "PATCH to Pi-hole failed"
     activity_log.log("host", f"Removed reservation for {ip} from primary scope")
@@ -160,7 +164,7 @@ def delete_reservation(ip: str) -> tuple:
 
 
 def update_reservation_mac(ip: str, new_mac: str) -> tuple:
-    full = _api_get(PIHOLE_API_HOST, "/config")
+    full = _api_get(_primary_host(), "/config")
     if not full:
         return False, "Failed to fetch config from Pi-hole"
 
@@ -182,7 +186,7 @@ def update_reservation_mac(ip: str, new_mac: str) -> tuple:
         return False, f"No static reservation found for {ip}"
 
     dhcp["hosts"] = new_hosts
-    result = _api_patch(PIHOLE_API_HOST, "/config", {"config": {"dhcp": dhcp}})
+    result = _api_patch(_primary_host(), "/config", {"config": {"dhcp": dhcp}})
     if result is None:
         return False, "PATCH to Pi-hole failed"
     activity_log.log("host", f"Changed MAC for {ip} to {new_mac} in primary scope")
