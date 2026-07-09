@@ -126,6 +126,8 @@ config file to edit.
 | `MONITOR_CHECK_INTERVAL` | `60` | Seconds between health checks (also adjustable live from the Health page) |
 | `MONITOR_DOMAINS` | `google.com,cloudflare.com` | Domains queried for the DNS-layer health check — passes if any one resolves |
 | `MONITOR_DNS_RETRIES` | `3` | DNS check retries before marking a node's DNS as failed |
+| `MONITOR_CONFIRM_ATTEMPTS` | `3` | Failed probes required in a row (spaced `MONITOR_CONFIRM_INTERVAL_SECS` apart) before a node is ever reported/shown as down — avoids a single transient blip flipping its status |
+| `MONITOR_CONFIRM_INTERVAL_SECS` | `45` | Seconds between down-confirmation probes |
 | `MONITOR_REBOOT_AFTER` | `3` | Consecutive failures before the first SSH reboot is attempted |
 | `MONITOR_REBOOT_RETRIES` | `2` | Extra SSH reboot attempts if still down, spaced by `MONITOR_REBOOT_AFTER_MINUTES`; exhausted retries leave the node down and flagged, no further automated action |
 | `MONITOR_REBOOT_AFTER_MINUTES` | `10` | Minutes between SSH reboot retries |

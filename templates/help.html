@@ -345,6 +345,14 @@
       (1–60 min) without touching environment variables.
     </p>
     <p>
+      <strong>Down confirmation:</strong> a single failed probe never immediately marks a node down — it
+      must fail <code>MONITOR_CONFIRM_ATTEMPTS</code> times in a row (default 3), spaced
+      <code>MONITOR_CONFIRM_INTERVAL_SECS</code> apart (default 45s), before the node is reported/shown as
+      down. This avoids a false alarm from a single transient blip (e.g. a node briefly under heavy load
+      from something like a Diagnostics run causing one slow DNS response). A healthy probe still returns
+      immediately, so this adds no delay to normal checks — only to a node that's actually failing.
+    </p>
+    <p>
       <strong>Auto-heal:</strong> a node that fails <code>MONITOR_REBOOT_AFTER</code> consecutive checks
       gets an SSH reboot, then up to <code>MONITOR_REBOOT_RETRIES</code> more attempts spaced
       <code>MONITOR_REBOOT_AFTER_MINUTES</code> apart if it's still down. Every attempt is gated on cluster

@@ -28,6 +28,8 @@ SSH_KEY           = os.environ.get("PIHOLE_SSH_KEY", "/data/ssh/pihole_key")
 CHECK_INTERVAL    = int(os.environ.get("MONITOR_CHECK_INTERVAL", "60"))
 MONITOR_DOMAINS   = [d.strip() for d in os.environ.get("MONITOR_DOMAINS", "google.com,cloudflare.com").split(",") if d.strip()]
 DNS_RETRIES       = int(os.environ.get("MONITOR_DNS_RETRIES", "3"))
+CONFIRM_ATTEMPTS         = int(os.environ.get("MONITOR_CONFIRM_ATTEMPTS", "3"))
+CONFIRM_INTERVAL_SECS    = int(os.environ.get("MONITOR_CONFIRM_INTERVAL_SECS", "45"))
 REBOOT_AFTER      = int(os.environ.get("MONITOR_REBOOT_AFTER", "3"))
 REBOOT_AFTER_MINS = int(os.environ.get("MONITOR_REBOOT_AFTER_MINUTES", "10"))
 REBOOT_RETRIES    = int(os.environ.get("MONITOR_REBOOT_RETRIES", "2"))
@@ -133,7 +135,7 @@ def _api_health(ip) -> bool:
         return False
 
 
-def _check_node(ip) -> dict:
+def _probe_once(ip) -> dict:
     """Three-layer health check: ping -> DNS (all MONITOR_DOMAINS, retried) -> Pi-hole API."""
     if not _ping(ip):
         return {"ok": False, "ms": 0, "reason": "ping_failed"}
@@ -155,6 +157,24 @@ def _check_node(ip) -> dict:
     if not _api_health(ip):
         return {"ok": False, "ms": avg_ms, "reason": "api_failed"}
     return {"ok": True, "ms": avg_ms, "reason": "healthy"}
+
+
+def _check_node(ip) -> dict:
+    """Confirms a failure before reporting it, to avoid a single transient
+    blip (e.g. a node briefly loaded, dropping one ping/DNS probe) flipping
+    the node to "down" — a probe is only reported as down after
+    MONITOR_CONFIRM_ATTEMPTS consecutive failures, spaced
+    MONITOR_CONFIRM_INTERVAL_SECS apart. The first successful probe returns
+    immediately, so a healthy node never pays this cost."""
+    result = _probe_once(ip)
+    if result["ok"]:
+        return result
+    for attempt in range(1, CONFIRM_ATTEMPTS):
+        time.sleep(CONFIRM_INTERVAL_SECS)
+        result = _probe_once(ip)
+        if result["ok"]:
+            return result
+    return result
 
 
 def _quorum_ok(failing_ip: str) -> bool:
@@ -240,6 +260,7 @@ def _monitor_loop():
     _monitor_ips = PIHOLE_IPS + ([PIHOLE_VIP] if PIHOLE_VIP and PIHOLE_VIP not in PIHOLE_IPS else [])
     print(f"[monitor] Watching: {_monitor_ips}  domains={MONITOR_DOMAINS}")
     print(f"[monitor] VIP (monitor-only): {PIHOLE_VIP or 'none'}")
+    print(f"[monitor] Down confirmation: {CONFIRM_ATTEMPTS} failed probes, {CONFIRM_INTERVAL_SECS}s apart, before reporting down")
     print(f"[monitor] SSH reboot: after {REBOOT_AFTER} consecutive failures, up to {REBOOT_RETRIES} retries spaced {REBOOT_AFTER_MINS}m apart")
 
     while True:
