@@ -53,6 +53,7 @@
     <a href="#external-dhcp">External DHCP sync</a>
     <a href="#setup">Setup (SSH)</a>
     <a href="#log">Activity log</a>
+    <a href="#health">Health</a>
     <a href="#troubleshooting">Troubleshooting</a>
   </div>
 
@@ -333,6 +334,45 @@
     </p>
   </div>
 
+  <div class="section-title" id="health">Health</div>
+  <div class="card">
+    <h3>What it's for <a href="/monitor">Open →</a></h3>
+    <p>
+      Independent, always-on monitoring for every physical node: a three-layer check every
+      <code>MONITOR_CHECK_INTERVAL</code> seconds (ping → DNS resolution against
+      <code>MONITOR_DOMAINS</code> → Pi-hole API reachability), a response-time sparkline per node, uptime,
+      current blocking status, and 24h query totals. Adjustable live from a dropdown on the page itself
+      (1–60 min) without touching environment variables.
+    </p>
+    <p>
+      <strong>Auto-heal:</strong> a node that fails <code>MONITOR_REBOOT_AFTER</code> consecutive checks
+      gets an SSH reboot, then up to <code>MONITOR_REBOOT_RETRIES</code> more attempts spaced
+      <code>MONITOR_REBOOT_AFTER_MINUTES</code> apart if it's still down. Every attempt is gated on cluster
+      quorum (at least 2 other nodes healthy) so this never fires while the cluster itself may be the
+      problem. If all retries are exhausted, the node is left down and flagged in the failure log — there's
+      no hypervisor-level escalation, on purpose, so a bad reboot loop can't take out the underlying VM/LXC
+      too.
+    </p>
+    <p>
+      <strong>VIP master &amp; manual failover</strong> — tracks which physical node currently holds the
+      keepalived VIP and keeps a history of master changes, plus a one-click manual failover (restarts
+      keepalived on the current master so the backup takes over). Entirely hidden from this page if
+      <code>PIHOLE_VIP</code> isn't set — see <a href="#failover">Failover</a> above for the DHCP-specific
+      half of VIP handling.
+    </p>
+    <p>
+      <strong>Diagnostics</strong> — runs a scripted health dump on a node over SSH (system resources,
+      <code>pihole-FTL</code>/keepalived status and journals, DNS resolution tests, DHCP config/leases,
+      rate-limiting activity) and pulls the report back into fleet-manager's own <code>/data</code> volume,
+      browsable from the "Saved diagnostics" list on this page — it doesn't just sit on the node
+      unreachable. Reports are pruned to the most recent 50.
+    </p>
+    <p>
+      Requires <code>ping</code>/<code>dig</code> and the <code>NET_RAW</code> capability in the
+      container — both are already set up in the published image and <code>docker-compose.yml</code>.
+    </p>
+  </div>
+
   <div class="section-title" id="troubleshooting">Troubleshooting &amp; tips</div>
   <div class="card">
     <ul>
@@ -365,6 +405,15 @@
       <li><strong>External DHCP sync shows "Not configured"</strong> — expected unless
         <code>EXTERNAL_DHCP_SOURCE</code> and the matching UniFi credentials are set; this feature is
         inert by default.</li>
+      <li><strong>Every node on the Health page shows "ping_failed"</strong> — the container is missing the
+        <code>ping</code>/<code>dig</code> binaries or the <code>NET_RAW</code> capability. Both are already
+        included in the published image and <code>docker-compose.yml</code>; if you're on a custom build or
+        a bare <code>docker run</code>, make sure <code>iputils-ping</code>/<code>dnsutils</code> are
+        installed and <code>--cap-add=NET_RAW</code> is set.</li>
+      <li><strong>Reboot/Diagnostics silently fails with "Access denied" or "Please run as root"</strong> —
+        <code>PIHOLE_SSH_USER</code> is a non-root account without passwordless <code>sudo</code> for
+        <code>reboot</code>/<code>systemctl</code>/the diagnostics script. See
+        <a href="#setup" style="color:var(--blue)">Setup</a> and the SSH account requirements above.</li>
     </ul>
   </div>
 </div>

@@ -79,6 +79,24 @@ replication across nodes, scheduled software updates, and activity logging.
   no stored password.
 - **Activity log** — unified history of pushes, replication runs, upgrades,
   and failovers.
+- **Node health monitoring** — three-layer health check per node (ping → DNS
+  → Pi-hole API) with a response-time sparkline, uptime tracking, and a
+  failure log. A node that stays down gets an SSH reboot, then up to two
+  more retries spaced several minutes apart (gated on cluster quorum so
+  this never fires while the cluster itself may be unhealthy) — if all
+  retries are exhausted it's left down and flagged for manual intervention
+  rather than escalated to a hypervisor-level restart.
+- **VIP master detection & manual failover** — tracks which physical node
+  currently holds the keepalived VIP (SSH interface check, falling back to
+  a Pi-hole session-token probe), keeps a history of master changes, and
+  offers a one-click manual failover (restarts keepalived on the current
+  master so the backup takes over). Inert and hidden from the UI entirely
+  if `PIHOLE_VIP` isn't set.
+- **On-demand diagnostics** — runs a per-node diagnostic script (system
+  resources, `pihole-FTL`/keepalived service status and journals, DNS
+  resolution tests, DHCP config/leases, rate-limiting events) over SSH and
+  pulls the report back into fleet-manager's own `/data` volume — browsable
+  from the Health page instead of only existing on the node itself.
 
 ## Configuration
 
@@ -105,10 +123,23 @@ config file to edit.
 | `EXTERNAL_DHCP_POLL_SECS` | `300` | How often (seconds) the external DHCP-source sync re-polls and re-syncs |
 | `UNIFI_HOST` / `UNIFI_USER` / `UNIFI_PASSWORD` | *(optional)* | UniFi OS controller credentials — all required together if `EXTERNAL_DHCP_SOURCE=unifi` |
 | `UNIFI_SITE` | `default` | UniFi site name |
+| `MONITOR_CHECK_INTERVAL` | `60` | Seconds between health checks (also adjustable live from the Health page) |
+| `MONITOR_DOMAINS` | `google.com,cloudflare.com` | Domains queried for the DNS-layer health check — passes if any one resolves |
+| `MONITOR_DNS_RETRIES` | `3` | DNS check retries before marking a node's DNS as failed |
+| `MONITOR_REBOOT_AFTER` | `3` | Consecutive failures before the first SSH reboot is attempted |
+| `MONITOR_REBOOT_RETRIES` | `2` | Extra SSH reboot attempts if still down, spaced by `MONITOR_REBOOT_AFTER_MINUTES`; exhausted retries leave the node down and flagged, no further automated action |
+| `MONITOR_REBOOT_AFTER_MINUTES` | `10` | Minutes between SSH reboot retries |
+| `MONITOR_UPTIME_INTERVAL` | `300` | Seconds between uptime refresh + VIP master re-detection |
 | `TZ` | `UTC` | Container timezone |
 
+Node health monitoring needs `ping` and `dig` inside the container plus the
+`NET_RAW` capability for ICMP — both are already included in the published
+image and `docker-compose.yml`; if you're building your own image or
+running with `docker run` directly, make sure to add `--cap-add=NET_RAW`.
+
 Data (VLAN definitions, replication ledger, updater state, activity log,
-the SSH key) persists under `/data`, which should be mounted as a volume.
+the SSH key, saved diagnostics reports) persists under `/data`, which
+should be mounted as a volume.
 
 ## The `PIHOLE_SSH_USER` account
 
