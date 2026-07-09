@@ -99,6 +99,12 @@ def page_wizard():
 
 @app.route("/")
 def page_vlans():
+    # No nodes configured at all is the unambiguous signal for "freshly
+    # installed container" — once even one node is added this never fires
+    # again, so it doesn't get in the way of someone who's deliberately
+    # cleared their fleet down to zero nodes for some other reason.
+    if not nodes.get_ips():
+        return redirect("/wizard")
     return render_template("vlans.html", active_page="vlans")
 
 

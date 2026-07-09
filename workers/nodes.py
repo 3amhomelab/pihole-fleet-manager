@@ -37,17 +37,24 @@ def _save(ips: list) -> None:
     host_env.write_vars({"PIHOLE_IPS": ",".join(ips)})
 
 
+def _read() -> list:
+    """Unlocked — only call with _lock already held (see get_ips/add_ip/
+    remove_ip below); threading.Lock isn't reentrant, so a locked caller
+    must never go through get_ips() itself."""
+    if not os.path.exists(DATA_FILE):
+        ips = _seed_from_env()
+        _save(ips)
+        return ips
+    try:
+        with open(DATA_FILE) as f:
+            return json.load(f).get("ips", [])
+    except (OSError, json.JSONDecodeError):
+        return _seed_from_env()
+
+
 def get_ips() -> list:
     with _lock:
-        if not os.path.exists(DATA_FILE):
-            ips = _seed_from_env()
-            _save(ips)
-            return ips
-        try:
-            with open(DATA_FILE) as f:
-                return json.load(f).get("ips", [])
-        except (OSError, json.JSONDecodeError):
-            return _seed_from_env()
+        return _read()
 
 
 def add_ip(ip: str) -> tuple:
@@ -57,7 +64,7 @@ def add_ip(ip: str) -> tuple:
     except ValueError:
         return None, f"Invalid IPv4 address: {ip}"
     with _lock:
-        ips = get_ips()
+        ips = _read()
         if ip in ips:
             return None, f"{ip} is already in the fleet"
         ips.append(ip)
@@ -68,7 +75,7 @@ def add_ip(ip: str) -> tuple:
 
 def remove_ip(ip: str) -> tuple:
     with _lock:
-        ips = get_ips()
+        ips = _read()
         if ip not in ips:
             return None, f"{ip} is not in the fleet"
         ips = [i for i in ips if i != ip]
