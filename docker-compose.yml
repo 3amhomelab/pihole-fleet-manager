@@ -38,6 +38,8 @@ services:
       - MONITOR_UPTIME_INTERVAL=${MONITOR_UPTIME_INTERVAL:-300}
       - PORT=8080
       - TZ=${TZ:-UTC}
+    cap_add:
+      - NET_RAW
     restart: unless-stopped
 
 volumes:
