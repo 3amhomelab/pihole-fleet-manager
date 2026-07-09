@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Recovery — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px;max-width:820px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:28px; }
+.section-title:first-child { margin-top:0; }
+.hint { font-size:12px;color:var(--muted); }
+.warn-banner { background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:var(--yellow);border-radius:8px;padding:12px 16px;font-size:12px;margin-bottom:20px;line-height:1.6; }
+
+.form-row { display:flex;align-items:center;gap:14px;margin-bottom:16px;flex-wrap:wrap; }
+.form-row select { background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 12px;font-size:13px; }
+.arrow { color:var(--muted);font-size:16px; }
+.clone-btn { background:var(--red-bg);border:1px solid rgba(239,68,68,.4);color:var(--red);border-radius:7px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer; }
+.clone-btn:hover:not(:disabled) { background:rgba(239,68,68,.25); }
+.clone-btn:disabled { opacity:.4;cursor:not-allowed; }
+.clone-status { font-size:13px;padding:6px 12px;border-radius:5px;display:none; }
+.clone-status.running { background:rgba(245,158,11,.12);color:var(--yellow); }
+.clone-status.success { background:var(--green-bg);color:var(--green); }
+.clone-status.error   { background:var(--red-bg);color:var(--red); }
+
+.log-card { background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:28px; }
+.log-header { display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted); }
+.log-body { padding:12px 16px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted);max-height:220px;overflow-y:auto;white-space:pre-wrap; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar"><h1>Recovery</h1></div>
+
+<div class="container">
+  <p class="hint" style="margin-bottom:16px">
+    Clones a healthy node's settings, DHCP static reservations, groups &amp; client group assignments,
+    and VLAN dnsmasq.d scopes onto a target node — then triggers a gravity update on the target. Use this
+    after reprovisioning a wiped/replaced node, instead of restoring from a Teleporter backup (Teleporter
+    only exports settings, not the full gravity/query databases, so it's a poor fit for actually rebuilding
+    a node).
+  </p>
+
+  <div class="warn-banner">
+    This <strong>overwrites</strong> the target node's settings, DHCP reservations, groups, and client
+    assignments with the source's — there's no merge, no recency comparison, and no undo. Only run this
+    against a node you intend to fully replace with another's state (a fresh/wiped node, typically).
+  </div>
+
+  <div class="section-title">Clone a node</div>
+  <div class="form-row">
+    <select id="source-select"></select>
+    <span class="arrow">→</span>
+    <select id="target-select"></select>
+    <button class="clone-btn" id="clone-btn" onclick="triggerClone()">Clone now</button>
+    <span class="clone-status" id="clone-status"></span>
+  </div>
+
+  <div class="log-card">
+    <div class="log-header">Clone log <span id="log-ts"></span></div>
+    <div class="log-body" id="log-body">Ready.</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadNodes() {
+  // The updater endpoint always lists every configured Pi-hole IP.
+  const u = await fetch('/api/updater');
+  const d = await u.json();
+  const ips = Object.keys(d.nodes || {});
+  const opts = ips.map(ip => `<option value="${ip}">${ip}</option>`).join('');
+  document.getElementById('source-select').innerHTML = opts;
+  document.getElementById('target-select').innerHTML = opts;
+  if (ips.length > 1) document.getElementById('target-select').selectedIndex = 1;
+}
+
+let poller = null;
+function renderStatus(data) {
+  const st = document.getElementById('clone-status');
+  const btn = document.getElementById('clone-btn');
+  const log = document.getElementById('log-body');
+  const ts = document.getElementById('log-ts');
+  if (data.status && data.status !== 'idle') {
+    st.className = 'clone-status ' + data.status;
+    st.textContent = data.message || data.status;
+    st.style.display = '';
+  } else { st.style.display = 'none'; }
+  btn.disabled = data.status === 'running';
+  ts.textContent = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '';
+  const lines = data.log || [];
+  log.textContent = lines.length ? lines.join('\n') : 'Ready.';
+  log.scrollTop = log.scrollHeight;
+}
+async function pollStatus() {
+  try { const r = await fetch('/api/recovery/status'); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
+async function triggerClone() {
+  const source = document.getElementById('source-select').value;
+  const target = document.getElementById('target-select').value;
+  if (source === target) { alert('Source and target must be different nodes'); return; }
+  if (!confirm(`This will OVERWRITE ${target}'s settings, DHCP reservations, and groups with ${source}'s. Continue?`)) return;
+  document.getElementById('clone-btn').disabled = true;
+  await fetch('/api/recovery/clone', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({source, target})});
+  clearInterval(poller);
+  let n = 0;
+  poller = setInterval(async () => {
+    n++;
+    const data = await pollStatus();
+    if (data) renderStatus(data);
+    if (!data || data.status !== 'running' || n > 120) clearInterval(poller);
+  }, 2000);
+}
+async function refreshStatus() { const d = await pollStatus(); if (d) renderStatus(d); }
+
+setInterval(refreshStatus, 5000); refreshStatus();
+loadNodes();
+</script>
+{% endblock %}

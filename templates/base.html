@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Pihole Fleet Manager{% endblock %}</title>
+<style>
+:root {
+  --bg:        #0f1117;
+  --sidebar:   #090c12;
+  --surface:   #1a1f2e;
+  --border:    #2d3550;
+  --text:      #e2e8f0;
+  --muted:     #64748b;
+  --green:     #22c55e;
+  --red:       #ef4444;
+  --yellow:    #f59e0b;
+  --blue:      #3b82f6;
+  --font:      -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono:      'SFMono-Regular', Consolas, monospace;
+  --sidebar-w: 210px;
+  --green-bg:  rgba(34,197,94,0.12);
+  --red-bg:    rgba(239,68,68,0.12);
+  --blue-bg:   rgba(59,130,246,0.12);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.5; }
+
+.layout { display: flex; min-height: 100vh; }
+.sidebar {
+  width: var(--sidebar-w); background: var(--sidebar); border-right: 1px solid var(--border);
+  position: fixed; top: 0; left: 0; bottom: 0; display: flex; flex-direction: column;
+}
+.main { margin-left: var(--sidebar-w); flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+
+.sidebar-logo { padding: 16px 14px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+.sidebar-logo-icon { color: var(--blue); flex-shrink: 0; }
+.sidebar-logo-name { font-size: 14px; font-weight: 700; }
+.sidebar-logo-sub  { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+.nav-section { padding: 12px 8px 2px; }
+.nav-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 0 8px; margin-bottom: 4px; display: block; }
+.nav-item { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 13px; margin-bottom: 2px; }
+.nav-item:hover  { background: rgba(255,255,255,.06); color: var(--text); }
+.nav-item.active { background: var(--blue-bg); color: var(--blue); }
+
+.sidebar-footer { margin-top: auto; padding: 10px 14px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); }
+
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; }
+}
+</style>
+{% block styles %}{% endblock %}
+</head>
+<body>
+<div class="layout">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="sidebar-logo-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+      </svg>
+    </div>
+    <div>
+      <div class="sidebar-logo-name">Fleet Manager</div>
+      <div class="sidebar-logo-sub">Pi-hole Cluster · v{{ app_version }}</div>
+    </div>
+  </div>
+
+  <div class="nav-section">
+    <span class="nav-label">DHCP</span>
+    <a href="/" class="nav-item {{ 'active' if active_page == 'vlans' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="1.5" y="3.5" width="13" height="9" rx="1.5"/><circle cx="11" cy="8" r="1.5"/>
+      </svg>
+      VLANs
+    </a>
+    <a href="/replication" class="nav-item {{ 'active' if active_page == 'replication' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 8a6 6 0 0 1 10.5-3.9M14 8a6 6 0 0 1-10.5 3.9"/><path d="M12.5 1.5v3h-3M3.5 14.5v-3h3"/>
+      </svg>
+      Replication
+    </a>
+    <a href="/updater" class="nav-item {{ 'active' if active_page == 'updater' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 1.5v8M8 9.5L5 6.5M8 9.5l3-3"/><path d="M2.5 11v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2"/>
+      </svg>
+      Updater
+    </a>
+    <a href="/failover" class="nav-item {{ 'active' if active_page == 'failover' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 1.5l6 3v4c0 3.5-2.5 5.8-6 6.5-3.5-.7-6-3-6-6.5v-4l6-3z"/><path d="M5.5 8l1.8 1.8L10.5 6.3"/>
+      </svg>
+      Failover
+    </a>
+  </div>
+
+  <div class="nav-section">
+    <span class="nav-label">Monitoring</span>
+    <a href="/stats" class="nav-item {{ 'active' if active_page == 'stats' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 13.5h12M4 13.5V8M8 13.5V4M12 13.5v-6"/>
+      </svg>
+      Stats
+    </a>
+  </div>
+
+  <div class="nav-section">
+    <span class="nav-label">System</span>
+    <a href="/setup" class="nav-item {{ 'active' if active_page == 'setup' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 1v2.2M8 12.8V15M15 8h-2.2M3.2 8H1M12.7 3.3l-1.5 1.5M4.8 11.2l-1.5 1.5M12.7 12.7l-1.5-1.5M4.8 4.8L3.3 3.3"/>
+        <circle cx="8" cy="8" r="3"/>
+      </svg>
+      Setup
+    </a>
+    <a href="/recovery" class="nav-item {{ 'active' if active_page == 'recovery' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.5 8a5.5 5.5 0 0 1 9.3-4M13.5 8a5.5 5.5 0 0 1-9.3 4"/><path d="M11.8 1.5v3h-3M4.2 14.5v-3h3"/>
+      </svg>
+      Recovery
+    </a>
+    <a href="/log" class="nav-item {{ 'active' if active_page == 'log' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 3.5h12M2 8h12M2 12.5h8"/>
+      </svg>
+      Log
+    </a>
+    <a href="/help" class="nav-item {{ 'active' if active_page == 'help' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="8" cy="8" r="6.5"/><path d="M6 6.2a2 2 0 1 1 2.8 1.8c-.6.3-1 .8-1 1.5v.3"/><circle cx="8" cy="11.5" r=".2" fill="currentColor"/>
+      </svg>
+      Help
+    </a>
+  </div>
+
+  <div class="sidebar-footer">Pihole Fleet Manager</div>
+</aside>
+
+<div class="main">
+{% block content %}{% endblock %}
+</div>
+
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

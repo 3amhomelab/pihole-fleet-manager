@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}Replication — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px;max-width:820px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:28px; }
+.section-title:first-child { margin-top:0; }
+.hint { font-size:12px;color:var(--muted); }
+
+/* Sync bar */
+.sync-row { display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap; }
+.sync-btn { background:var(--blue-bg);border:1px solid var(--blue);color:var(--blue);border-radius:7px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer; }
+.sync-btn:hover:not(:disabled) { background:rgba(59,130,246,.25); }
+.sync-btn:disabled { opacity:.4;cursor:not-allowed; }
+.sync-status { font-size:13px;padding:6px 12px;border-radius:5px;display:none; }
+.sync-status.running { background:rgba(245,158,11,.12);color:var(--yellow); }
+.sync-status.success { background:var(--green-bg);color:var(--green); }
+.sync-status.error   { background:var(--red-bg);color:var(--red); }
+.auto-input { width:70px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-size:13px; }
+.save-btn { background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer; }
+.save-btn:hover { background:rgba(255,255,255,.06); }
+.log-card { background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:28px; }
+.log-header { display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted); }
+.log-body { padding:12px 16px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted);max-height:180px;overflow-y:auto;white-space:pre-wrap; }
+
+/* Category groups */
+.category-card { background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:20px;overflow:hidden; }
+.category-header { padding:14px 20px;border-bottom:1px solid var(--border); }
+.toggle-label { font-size:13px;font-weight:700; }
+.toggle-desc { font-size:12px;color:var(--muted);margin-top:3px;line-height:1.5; }
+
+/* Individual path checkboxes */
+.path-row { border-bottom:1px solid rgba(45,53,80,.5); }
+.path-row:last-child { border-bottom:none; }
+.path-checkbox { display:flex;align-items:center;gap:10px;padding:10px 20px;cursor:pointer; }
+.path-checkbox:hover { background:rgba(255,255,255,.02); }
+.path-checkbox input { width:15px;height:15px;accent-color:var(--blue);cursor:pointer;flex-shrink:0; }
+.path-name { font-size:12px;font-family:var(--mono);color:var(--text); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar"><h1>Replication</h1></div>
+
+<div class="container">
+  <p class="hint" style="margin-bottom:20px">
+    Choose which groups of Pi-hole settings (and the DHCP scope's static reservations) are kept in sync
+    across all Pi-holes. Each run compares every node and keeps whichever value changed most recently —
+    including edits made directly on a node outside this app. Anything toggled off is left alone.
+  </p>
+
+  <div class="section-title">Auto-replication</div>
+  <div class="sync-row">
+    <label class="hint" for="auto-interval">Repeat every</label>
+    <input type="number" class="auto-input" id="auto-interval" min="0" step="1">
+    <span class="hint">minutes (0 = disabled)</span>
+    <button class="save-btn" onclick="saveAutoInterval()">Save</button>
+  </div>
+  <p class="hint" id="auto-info" style="margin-bottom:20px">Loading…</p>
+
+  <div class="section-title">Replicate now</div>
+  <div class="sync-row">
+    <button class="sync-btn" id="sync-btn" onclick="triggerSync()">Compare &amp; merge all Pi-holes now</button>
+    <span class="sync-status" id="sync-status"></span>
+  </div>
+  <div class="log-card">
+    <div class="log-header">Replication log <span id="log-ts"></span></div>
+    <div class="log-body" id="log-body">Ready.</div>
+  </div>
+
+  <div class="section-title">Drift check (read-only)</div>
+  <p class="hint" style="margin-bottom:14px">
+    Compares every enabled setting across all reachable nodes without changing anything — use this to
+    verify nodes are actually in sync, independent of whether a merge run reported success.
+  </p>
+  <div class="sync-row">
+    <button class="sync-btn" id="drift-btn" onclick="triggerDrift()">Check for drift now</button>
+    <span class="sync-status" id="drift-status"></span>
+  </div>
+  <div class="log-card">
+    <div class="log-header">Drift log <span id="drift-log-ts"></span></div>
+    <div class="log-body" id="drift-log-body">Ready.</div>
+  </div>
+
+  <div id="groups"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function loadGroups() {
+  const r = await fetch('/api/replication/options');
+  const d = await r.json();
+  renderGroups(d.groups || []);
+}
+
+function renderGroups(groups) {
+  const byCategory = {};
+  for (const g of groups) {
+    (byCategory[g.category] = byCategory[g.category] || []).push(g);
+  }
+  const order = ['DHCP', 'DNS', 'General', 'Clients'];
+  const cats = order.filter(c => byCategory[c]);
+
+  document.getElementById('groups').innerHTML = cats.map(cat => `
+    <div class="section-title">${cat}</div>
+    ${byCategory[cat].map(g => `
+      <div class="category-card">
+        <div class="category-header">
+          <div class="toggle-label">${esc(g.label)}</div>
+          ${g.desc ? `<div class="toggle-desc">${esc(g.desc)}</div>` : ''}
+        </div>
+        ${g.paths.map(p => `
+          <div class="path-row">
+            <label class="path-checkbox">
+              <input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="togglePath('${p.path}', this.checked, this)">
+              <span class="path-name">${esc(p.path)}</span>
+            </label>
+          </div>
+        `).join('')}
+      </div>
+    `).join('')}
+  `).join('');
+}
+
+async function togglePath(path, enabled, checkbox) {
+  checkbox.disabled = true;
+  await fetch('/api/replication/options', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({[path]: enabled}),
+  });
+  checkbox.disabled = false;
+}
+
+// --- Auto-replication ---
+function renderAutoInfo(d) {
+  const el = document.getElementById('auto-info');
+  if (!d.interval_minutes) {
+    el.textContent = 'Auto-replication disabled — use "Compare & merge all Pi-holes now" below to sync manually.';
+    return;
+  }
+  let text = `Auto-replicating every ${d.interval_minutes} minute(s).`;
+  if (d.last_run) {
+    const last = new Date(d.last_run);
+    const next = new Date(last.getTime() + d.interval_minutes * 60000);
+    text += ` Last run: ${last.toLocaleString()} — next due: ${next.toLocaleString()}.`;
+  }
+  el.textContent = text;
+}
+async function loadAuto() {
+  const r = await fetch('/api/replication/auto');
+  const d = await r.json();
+  if (document.activeElement !== document.getElementById('auto-interval')) {
+    document.getElementById('auto-interval').value = d.interval_minutes || 0;
+  }
+  renderAutoInfo(d);
+}
+async function saveAutoInterval() {
+  const minutes = parseInt(document.getElementById('auto-interval').value, 10) || 0;
+  const r = await fetch('/api/replication/auto', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({interval_minutes: minutes}),
+  });
+  renderAutoInfo(await r.json());
+}
+
+// --- Sync ---
+let syncPoller = null;
+function renderSyncStatus(data) {
+  const st = document.getElementById('sync-status');
+  const btn = document.getElementById('sync-btn');
+  const log = document.getElementById('log-body');
+  const ts = document.getElementById('log-ts');
+  if (data.status && data.status !== 'idle') {
+    st.className = 'sync-status ' + data.status;
+    st.textContent = data.message || data.status;
+    st.style.display = '';
+  } else { st.style.display = 'none'; }
+  btn.disabled = data.status === 'running';
+  ts.textContent = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '';
+  const lines = data.log || [];
+  log.textContent = lines.length ? lines.join('\n') : 'Ready.';
+  log.scrollTop = log.scrollHeight;
+}
+async function pollSync() {
+  try { const r = await fetch('/api/replication/sync/status'); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
+async function triggerSync() {
+  document.getElementById('sync-btn').disabled = true;
+  await fetch('/api/replication/sync', {method:'POST'});
+  clearInterval(syncPoller);
+  let n = 0;
+  syncPoller = setInterval(async () => {
+    n++;
+    const data = await pollSync();
+    if (data) renderSyncStatus(data);
+    if (!data || data.status !== 'running' || n > 40) clearInterval(syncPoller);
+  }, 2000);
+}
+async function refreshSyncStatus() { const d = await pollSync(); if (d) renderSyncStatus(d); }
+
+// --- Drift check ---
+let driftPoller = null;
+function renderDriftStatus(data) {
+  const st = document.getElementById('drift-status');
+  const btn = document.getElementById('drift-btn');
+  const log = document.getElementById('drift-log-body');
+  const ts = document.getElementById('drift-log-ts');
+  if (data.status && data.status !== 'idle') {
+    st.className = 'sync-status ' + data.status;
+    st.textContent = data.message || data.status;
+    st.style.display = '';
+  } else { st.style.display = 'none'; }
+  btn.disabled = data.status === 'running';
+  ts.textContent = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '';
+  const lines = (data.log || []).concat(data.findings && data.findings.length ? ['', 'Findings:', ...data.findings] : []);
+  log.textContent = lines.length ? lines.join('\n') : 'Ready.';
+  log.scrollTop = log.scrollHeight;
+}
+async function pollDrift() {
+  try { const r = await fetch('/api/replication/drift/status'); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
+async function triggerDrift() {
+  document.getElementById('drift-btn').disabled = true;
+  await fetch('/api/replication/drift', {method:'POST'});
+  clearInterval(driftPoller);
+  let n = 0;
+  driftPoller = setInterval(async () => {
+    n++;
+    const data = await pollDrift();
+    if (data) renderDriftStatus(data);
+    if (!data || data.status !== 'running' || n > 40) clearInterval(driftPoller);
+  }, 2000);
+}
+async function refreshDriftStatus() { const d = await pollDrift(); if (d) renderDriftStatus(d); }
+
+setInterval(refreshSyncStatus, 5000); refreshSyncStatus();
+setInterval(refreshDriftStatus, 5000); refreshDriftStatus();
+setInterval(loadAuto, 15000); loadAuto();
+loadGroups();
+</script>
+{% endblock %}

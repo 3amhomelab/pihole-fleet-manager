@@ -1,0 +1,37 @@
+services:
+  pihole-fleet-manager:
+    build: https://github.com/3amhomelab/pihole-fleet-manager.git#main
+    container_name: fleet-manager
+    ports:
+      - "${APP_PORT}:8080"
+    volumes:
+      - pihole_fleet_manager_data:/data
+      # Bind-mounts this .env so the Setup tab can write a freshly generated
+      # SSH key straight back to it — instant, no redeploy needed.
+      - ./.env:/config/host.env
+    environment:
+      - PIHOLE_IPS=${PIHOLE_IPS}
+      - PIHOLE_ADMIN_PASSWORD=${PIHOLE_ADMIN_PASSWORD}
+      - PIHOLE_SSH_USER=${PIHOLE_SSH_USER:-root}
+      - PIHOLE_SSH_KEY=${PIHOLE_SSH_KEY:-/data/ssh/pihole_key}
+      - PIHOLE_SSH_KEY_B64=${PIHOLE_SSH_KEY_B64}
+      - DNSMASQ_CONF_NAME=${DNSMASQ_CONF_NAME:-10-vlans.conf}
+      - PIHOLE_UPDATER_HOUR=${PIHOLE_UPDATER_HOUR:-3}
+      - UPGRADE_RETRIES=${UPGRADE_RETRIES:-3}
+      - UPDATER_VERSION_POLL_SECS=${UPDATER_VERSION_POLL_SECS:-3600}
+      - PIHOLE_VIP=${PIHOLE_VIP}
+      - DHCP_FAILOVER_CHECK_INTERVAL_SECS=${DHCP_FAILOVER_CHECK_INTERVAL_SECS:-15}
+      - GRAVITY_UPDATE_HOUR=${GRAVITY_UPDATE_HOUR:-4}
+      - GRAVITY_DROP_THRESHOLD_PERCENT=${GRAVITY_DROP_THRESHOLD_PERCENT:-10}
+      - EXTERNAL_DHCP_SOURCE=${EXTERNAL_DHCP_SOURCE}
+      - EXTERNAL_DHCP_POLL_SECS=${EXTERNAL_DHCP_POLL_SECS:-300}
+      - UNIFI_HOST=${UNIFI_HOST}
+      - UNIFI_USER=${UNIFI_USER}
+      - UNIFI_PASSWORD=${UNIFI_PASSWORD}
+      - UNIFI_SITE=${UNIFI_SITE:-default}
+      - PORT=8080
+      - TZ=${TZ:-UTC}
+    restart: unless-stopped
+
+volumes:
+  pihole_fleet_manager_data:

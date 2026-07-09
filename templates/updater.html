@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}Updater — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:28px; }
+.section-title:first-child { margin-top:0; }
+.hint { font-size:12px;color:var(--muted); }
+
+.node-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:16px; }
+.node-card { background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px; }
+.node-ip { font-size:14px;font-weight:700;font-family:var(--mono);margin-bottom:12px; }
+.node-stats { display:flex;flex-direction:column;gap:8px;margin-bottom:14px; }
+.stat-item { display:flex;justify-content:space-between;font-size:12px; }
+.stat-label { color:var(--muted); }
+.stat-value { font-weight:600;font-family:var(--mono); }
+.stat-value.ok { color:var(--green); }
+.stat-value.update { color:var(--yellow); }
+
+.upgrade-btn { width:100%;background:var(--blue-bg);border:1px solid var(--blue);color:var(--blue);border-radius:7px;padding:8px 0;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s; }
+.upgrade-btn:hover:not(:disabled) { background:rgba(59,130,246,.25); }
+.upgrade-btn:disabled { opacity:.4;cursor:not-allowed; }
+.upgrade-btn.has-update { border-color:rgba(245,158,11,.45);color:var(--yellow);background:rgba(245,158,11,.1); }
+.upgrade-btn.has-update:hover:not(:disabled) { background:rgba(245,158,11,.2); }
+
+.history-list { margin-top:14px;display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto; }
+.history-item { display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:5px 8px;border-radius:5px;background:var(--bg); }
+.history-badge { font-size:9px;font-weight:700;padding:2px 7px;border-radius:999px;letter-spacing:.03em; }
+.history-badge.upgraded   { background:var(--blue-bg);color:var(--blue); }
+.history-badge.up_to_date { background:var(--green-bg);color:var(--green); }
+.history-badge.failed     { background:var(--red-bg);color:var(--red); }
+.history-ts { color:var(--muted);font-family:var(--mono); }
+.empty-state { text-align:center;padding:20px;color:var(--muted);font-size:12px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar"><h1>Updater</h1></div>
+
+<div class="container">
+  <p class="hint" style="margin-bottom:20px">
+    Checks each Pi-hole's software version and can upgrade it (<code>pihole -up</code>, then reboots).
+    One node is auto-upgraded per day on a rotating schedule; you can also trigger any node manually below.
+  </p>
+
+  <div class="section-title">Nodes</div>
+  <div class="node-grid" id="node-grid"></div>
+
+  <div class="section-title">Gravity (blocklist) updates</div>
+  <p class="hint" style="margin-bottom:16px">
+    A blocklist URL that's briefly unreachable can be silently skipped/cached rather than erroring, with
+    no reliable success signal from Pi-hole beyond "the command exited 0". One node updates gravity per
+    day on its own rotating schedule (offset from the software updater's, so they don't collide); after
+    each update, this compares the node's own blocklist domain count against its count before the update
+    — a large drop is flagged as a probable partial-update failure rather than assumed to be a smaller
+    but successful blocklist.
+  </p>
+  <div class="node-grid" id="gravity-grid"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function timeAgo(iso) {
+  if (!iso) return 'Never';
+  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (secs < 60) return 'just now';
+  if (secs < 3600) return Math.floor(secs/60) + 'm ago';
+  if (secs < 86400) return Math.floor(secs/3600) + 'h ago';
+  return Math.floor(secs/86400) + 'd ago';
+}
+
+async function loadState() {
+  const r = await fetch('/api/updater');
+  const d = await r.json();
+  renderNodes(d.nodes || {});
+}
+
+function renderNodes(nodes) {
+  const ips = Object.keys(nodes);
+  document.getElementById('node-grid').innerHTML = ips.map(ip => {
+    const n = nodes[ip];
+    const hasUpdate = n.version_update_available && !n.upgrade_running;
+    const history = (n.history || []).slice().reverse();
+    const historyHtml = history.length ? history.map(e => `
+      <div class="history-item">
+        <span class="history-badge ${e.result}">${e.result.replace('_',' ').toUpperCase()}</span>
+        <span class="history-ts">${new Date(e.ts).toLocaleString()}</span>
+      </div>`).join('') : '<div class="empty-state">No upgrades yet</div>';
+
+    return `
+    <div class="node-card">
+      <div class="node-ip">${esc(ip)}</div>
+      <div class="node-stats">
+        <div class="stat-item"><span class="stat-label">Current version</span><span class="stat-value">${esc(n.version_current) || '—'}</span></div>
+        <div class="stat-item"><span class="stat-label">Latest version</span><span class="stat-value ${n.version_update_available ? 'update' : 'ok'}">${esc(n.version_latest) || '—'}</span></div>
+        <div class="stat-item"><span class="stat-label">Last upgraded</span><span class="stat-value">${timeAgo(n.last_upgraded)}</span></div>
+        ${hasUpdate ? `<div class="stat-item"><span class="stat-label">Auto-applies</span><span class="stat-value update">${n.next_auto ? new Date(n.next_auto).toLocaleString() : '—'}</span></div>` : ''}
+      </div>
+      <button class="upgrade-btn ${hasUpdate ? 'has-update' : ''}" id="btn-${ip.replace(/\./g,'-')}"
+        onclick="triggerUpgrade('${ip}')" ${n.upgrade_running ? 'disabled' : ''}>
+        ${n.upgrade_running ? 'Upgrading…' : (hasUpdate ? 'Update available — Upgrade' : 'Upgrade')}
+      </button>
+      <div class="history-list">${historyHtml}</div>
+    </div>`;
+  }).join('');
+}
+
+async function triggerUpgrade(ip) {
+  const btn = document.getElementById(`btn-${ip.replace(/\./g,'-')}`);
+  btn.disabled = true;
+  btn.textContent = 'Upgrading…';
+  const r = await fetch(`/api/updater/${ip}/upgrade`, {method: 'POST'});
+  const d = await r.json();
+  if (!d.ok) alert(d.message || 'Could not start upgrade');
+  setTimeout(loadState, 1500);
+}
+
+setInterval(loadState, 10000);
+loadState();
+
+// --- Gravity (blocklist) updates ---
+async function loadGravityState() {
+  const r = await fetch('/api/gravity');
+  const d = await r.json();
+  renderGravityNodes(d.nodes || {});
+}
+
+function renderGravityNodes(nodes) {
+  const ips = Object.keys(nodes);
+  document.getElementById('gravity-grid').innerHTML = ips.map(ip => {
+    const n = nodes[ip];
+    const history = (n.history || []).slice().reverse();
+    const historyHtml = history.length ? history.map(e => `
+      <div class="history-item">
+        <span class="history-badge ${e.result === 'updated' ? 'up_to_date' : (e.result === 'dropped' ? 'failed' : e.result)}">${e.result.toUpperCase()}</span>
+        <span class="history-ts">${new Date(e.ts).toLocaleString()}</span>
+      </div>`).join('') : '<div class="empty-state">No gravity updates yet</div>';
+
+    return `
+    <div class="node-card">
+      <div class="node-ip">${esc(ip)}</div>
+      <div class="node-stats">
+        <div class="stat-item"><span class="stat-label">Domain count</span><span class="stat-value">${n.last_domain_count != null ? n.last_domain_count.toLocaleString() : '—'}</span></div>
+        <div class="stat-item"><span class="stat-label">Last run</span><span class="stat-value">${timeAgo(n.last_run)}</span></div>
+        <div class="stat-item"><span class="stat-label">Next auto</span><span class="stat-value">${n.next_auto ? new Date(n.next_auto).toLocaleString() : '—'}</span></div>
+      </div>
+      <button class="upgrade-btn" id="gbtn-${ip.replace(/\./g,'-')}"
+        onclick="triggerGravity('${ip}')" ${n.running ? 'disabled' : ''}>
+        ${n.running ? 'Updating…' : 'Update gravity now'}
+      </button>
+      <div class="history-list">${historyHtml}</div>
+    </div>`;
+  }).join('');
+}
+
+async function triggerGravity(ip) {
+  const btn = document.getElementById(`gbtn-${ip.replace(/\./g,'-')}`);
+  btn.disabled = true;
+  btn.textContent = 'Updating…';
+  const r = await fetch(`/api/gravity/${ip}/update`, {method: 'POST'});
+  const d = await r.json();
+  if (!d.ok) alert(d.message || 'Could not start gravity update');
+  setTimeout(loadGravityState, 1500);
+}
+
+setInterval(loadGravityState, 10000);
+loadGravityState();
+</script>
+{% endblock %}

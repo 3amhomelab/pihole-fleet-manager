@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Log — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;gap:12px; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px;max-width:980px; }
+select.filter { background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px; }
+
+.event-list { background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden; }
+.event-row { display:flex;gap:12px;align-items:flex-start;padding:10px 16px;border-bottom:1px solid rgba(45,53,80,.5);font-size:13px; }
+.event-row:last-child { border-bottom:none; }
+.event-ts { color:var(--muted);font-family:var(--mono);font-size:11px;white-space:nowrap;padding-top:2px;min-width:150px; }
+.event-cat { font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 8px;border-radius:4px;white-space:nowrap;height:fit-content; }
+.event-cat.vlan, .event-cat.host       { background:var(--blue-bg);color:var(--blue); }
+.event-cat.replication, .event-cat.dhcp, .event-cat.push { background:rgba(139,92,246,.14);color:#a78bfa; }
+.event-cat.updater                    { background:var(--green-bg);color:var(--green); }
+.event-cat.setup                      { background:rgba(245,158,11,.14);color:var(--yellow); }
+.event-msg { flex:1; }
+.event-msg.error { color:var(--red); }
+.empty { padding:40px;text-align:center;color:var(--muted);font-size:13px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <h1>Activity Log</h1>
+  <select class="filter" id="cat-filter" onchange="loadEvents()">
+    <option value="">All categories</option>
+    <option value="vlan">VLANs</option>
+    <option value="host">Hosts</option>
+    <option value="replication">Replication</option>
+    <option value="dhcp">Primary DHCP sync</option>
+    <option value="push">VLAN push</option>
+    <option value="updater">Updater</option>
+    <option value="setup">Setup</option>
+  </select>
+</div>
+
+<div class="container">
+  <div class="event-list" id="event-list"><div class="empty">Loading…</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function loadEvents() {
+  const cat = document.getElementById('cat-filter').value;
+  const r = await fetch('/api/log?limit=300' + (cat ? '&category=' + encodeURIComponent(cat) : ''));
+  const d = await r.json();
+  renderEvents(d.events || []);
+}
+
+function renderEvents(events) {
+  const el = document.getElementById('event-list');
+  if (!events.length) { el.innerHTML = '<div class="empty">No activity recorded yet.</div>'; return; }
+  el.innerHTML = events.map(e => `
+    <div class="event-row">
+      <span class="event-ts">${new Date(e.ts).toLocaleString()}</span>
+      <span class="event-cat ${esc(e.category)}">${esc(e.category)}</span>
+      <span class="event-msg ${e.level === 'error' ? 'error' : ''}">${esc(e.message)}</span>
+    </div>
+  `).join('');
+}
+
+loadEvents();
+setInterval(loadEvents, 10000);
+</script>
+{% endblock %}

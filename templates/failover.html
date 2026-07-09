@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Failover — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px;max-width:820px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:28px; }
+.section-title:first-child { margin-top:0; }
+.hint { font-size:12px;color:var(--muted); }
+
+.toggle-row { display:flex;align-items:center;gap:14px;margin-bottom:14px; }
+.toggle-switch { position:relative;width:42px;height:24px;flex-shrink:0; }
+.toggle-switch input { opacity:0;width:0;height:0; }
+.toggle-slider { position:absolute;inset:0;background:var(--border);border-radius:999px;cursor:pointer;transition:.15s; }
+.toggle-slider::before { content:'';position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.15s; }
+input:checked + .toggle-slider { background:var(--blue); }
+input:checked + .toggle-slider::before { transform:translateX(18px); }
+
+.warn-banner { background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:var(--yellow);border-radius:8px;padding:12px 16px;font-size:12px;margin-bottom:20px;line-height:1.6; }
+.error-banner { background:var(--red-bg);border:1px solid rgba(239,68,68,.35);color:var(--red);border-radius:8px;padding:12px 16px;font-size:12px;margin-bottom:20px;line-height:1.6; }
+
+.active-card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:24px; }
+.active-node { font-size:22px;font-weight:700;font-family:var(--mono);color:var(--green); }
+.active-label { font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px; }
+
+.log-card { background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:28px; }
+.log-header { display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted); }
+.log-body { padding:12px 16px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted);max-height:180px;overflow-y:auto;white-space:pre-wrap; }
+
+.history-list { display:flex;flex-direction:column;gap:6px; }
+.history-item { display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:8px 12px;border-radius:6px;background:var(--surface);border:1px solid var(--border); }
+.history-move { font-family:var(--mono); }
+.history-ts { color:var(--muted);font-size:11px; }
+.empty-state { text-align:center;padding:20px;color:var(--muted);font-size:12px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar"><h1>Failover</h1></div>
+
+<div class="container">
+  <p class="hint" style="margin-bottom:20px">
+    DHCP is broadcast-based, so keepalived moving the VIP address does nothing to stop every Pi-hole
+    from independently answering DHCP requests — this only ever protects DNS. This enforces that only
+    the node currently holding the VIP has its DHCP server active, and re-checks continuously so a
+    manually re-enabled node gets corrected automatically.
+  </p>
+
+  <div id="vip-warning"></div>
+
+  <div class="section-title">Enable failover management</div>
+  <div class="toggle-row">
+    <label class="toggle-switch">
+      <input type="checkbox" id="enable-toggle" onchange="setEnabled(this.checked)">
+      <span class="toggle-slider"></span>
+    </label>
+    <span class="hint" id="enable-hint">Loading…</span>
+  </div>
+
+  <div class="section-title">Current state</div>
+  <div class="active-card">
+    <div class="active-label">Active DHCP node</div>
+    <div class="active-node" id="active-node">—</div>
+  </div>
+
+  <div class="log-card">
+    <div class="log-header">Latest check <span id="log-ts"></span></div>
+    <div class="log-body" id="log-body">Ready.</div>
+  </div>
+
+  <div class="section-title">Failover history</div>
+  <div class="history-list" id="history-list"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function loadState() {
+  const r = await fetch('/api/failover');
+  const d = await r.json();
+  render(d);
+}
+
+function render(d) {
+  const toggle = document.getElementById('enable-toggle');
+  if (document.activeElement !== toggle) toggle.checked = !!d.enabled;
+
+  const warnEl = document.getElementById('vip-warning');
+  if (!d.vip_configured) {
+    warnEl.innerHTML = `<div class="warn-banner">PIHOLE_VIP is not set — failover management can't determine which node is the VIP master, and is inactive regardless of the toggle above. Set PIHOLE_VIP in .env and redeploy to enable this.</div>`;
+  } else {
+    warnEl.innerHTML = '';
+  }
+
+  document.getElementById('enable-hint').textContent = d.enabled
+    ? 'Enabled — only the current VIP-holding node will have DHCP active.'
+    : 'Disabled — every node keeps whatever DHCP state it currently has (the ecosystem default, and the split-brain risk this page exists to fix).';
+
+  document.getElementById('active-node').textContent = d.active_node || '—';
+
+  const ts = document.getElementById('log-ts');
+  ts.textContent = d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : '';
+  const log = document.getElementById('log-body');
+  const lines = d.log || [];
+  log.textContent = lines.length ? lines.join('\n') : 'Ready.';
+
+  const history = (d.history || []).slice().reverse();
+  document.getElementById('history-list').innerHTML = history.length ? history.map(h => `
+    <div class="history-item">
+      <span class="history-move">${esc(h.from) || '<em>none</em>'} → ${esc(h.to)}</span>
+      <span class="history-ts">${new Date(h.ts).toLocaleString()}</span>
+    </div>`).join('') : '<div class="empty-state">No failovers recorded yet</div>';
+}
+
+async function setEnabled(enabled) {
+  await fetch('/api/failover/enabled', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled})});
+  await loadState();
+}
+
+setInterval(loadState, 5000);
+loadState();
+</script>
+{% endblock %}

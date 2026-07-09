@@ -1,0 +1,512 @@
+{% extends "base.html" %}
+{% block title %}VLANs — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:28px; }
+.section-title:first-child { margin-top:0; }
+
+/* Push / Sync bars (shared look) */
+.push-row { display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap; }
+.push-btn { background:var(--blue-bg);border:1px solid var(--blue);color:var(--blue);border-radius:7px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer; }
+.push-btn:hover:not(:disabled) { background:rgba(59,130,246,.25); }
+.push-btn:disabled { opacity:.4;cursor:not-allowed; }
+.preview-btn { background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:8px 14px;font-size:13px;cursor:pointer; }
+.preview-btn:hover { border-color:var(--blue);color:var(--blue); }
+.push-status { font-size:13px;padding:6px 12px;border-radius:5px;display:none; }
+.push-status.running { background:rgba(245,158,11,.12);color:var(--yellow); }
+.push-status.success { background:var(--green-bg);color:var(--green); }
+.push-status.error   { background:var(--red-bg);color:var(--red); }
+.log-card { background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:28px; }
+.log-header { display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted); }
+.log-body { padding:12px 16px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted);max-height:160px;overflow-y:auto;white-space:pre-wrap; }
+
+/* New VLAN form */
+.form-card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:28px; }
+.form-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px; }
+.form-field { display:flex;flex-direction:column;gap:5px; }
+.form-field label { font-size:11px;color:var(--muted); }
+.form-field input { background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-size:13px;outline:none; }
+.form-field input:focus { border-color:var(--blue); }
+.form-actions { margin-top:16px;display:flex;align-items:center;gap:10px; }
+.btn-primary { background:var(--blue);border:none;color:#fff;border-radius:6px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer; }
+.btn-primary:hover { background:#2563eb; }
+.form-error { color:var(--red);font-size:12px; }
+
+/* VLAN cards */
+.vlan-card { background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:20px;overflow:hidden; }
+.vlan-header { display:flex;justify-content:space-between;align-items:center;padding:16px 20px;cursor:pointer;transition:background .12s; }
+.vlan-header:hover { background:rgba(255,255,255,.03); }
+.vlan-header-left { display:flex;align-items:center;gap:10px; }
+.vlan-chevron { color:var(--muted);flex-shrink:0;transition:transform .15s; }
+.vlan-chevron.open { transform:rotate(90deg);color:var(--blue); }
+.hint { font-size:12px;color:var(--muted); }
+.vlan-title { font-size:15px;font-weight:700; }
+.vlan-sub { font-size:12px;color:var(--muted);font-family:var(--mono);margin-top:2px; }
+.vlan-tag { background:var(--border);color:var(--muted);border-radius:999px;padding:2px 10px;font-size:11px;margin-left:10px; }
+.vlan-hint { font-size:11px;color:var(--blue);margin-left:10px; }
+.vlan-actions { display:flex;gap:8px;align-items:center; }
+.del-btn { background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer; }
+.del-btn:hover { border-color:var(--red);color:var(--red); }
+.vlan-body { border-top:1px solid var(--border);padding:16px 20px;display:none; }
+.vlan-body.open { display:block; }
+.vlan-meta { display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;margin-bottom:16px; }
+.meta-item { display:flex;flex-direction:column;gap:2px; }
+.meta-label { font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em; }
+.meta-value { font-size:13px;font-weight:600;font-family:var(--mono); }
+
+/* Hosts table */
+table { width:100%;border-collapse:collapse; }
+thead th { padding:7px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--border); }
+thead th.sortable { cursor:pointer;user-select:none; }
+thead th.sortable:hover { color:var(--text); }
+tbody tr { border-bottom:1px solid rgba(45,53,80,.5); }
+tbody td { padding:8px 12px;font-size:13px; }
+td.ip  { font-family:var(--mono);color:var(--blue);font-weight:600;font-size:12px; }
+td.mac { font-family:var(--mono);color:var(--muted);font-size:11px; }
+td.ip span, td.mac span { cursor:pointer; border-bottom:1px dashed transparent; }
+td.ip span:hover, td.mac span:hover { border-bottom-color:currentColor; }
+.empty-state { text-align:center;padding:24px;color:var(--muted);font-size:13px; }
+
+.host-form { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px; }
+.host-form input { background:var(--bg);border:1px solid var(--blue);color:var(--text);border-radius:5px;padding:5px 9px;font-size:12px;font-family:var(--mono);width:130px;outline:none; }
+.host-form input.hostname { width:160px;font-family:var(--font); }
+.host-save { background:var(--blue);border:none;color:#fff;border-radius:5px;padding:6px 14px;font-size:12px;cursor:pointer;font-weight:600; }
+.host-status { font-size:11px;margin-left:4px; }
+.host-status.error { color:var(--red); }
+.host-status.ok    { color:var(--green); }
+
+/* Inline cell edit */
+.edit-input { background:var(--bg);border:1px solid var(--blue);color:var(--text);border-radius:4px;padding:3px 7px;font-size:11px;font-family:var(--mono);width:120px;outline:none; }
+.edit-save   { background:var(--blue);border:none;color:#fff;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-left:4px; }
+.edit-cancel { background:none;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-left:2px; }
+.edit-err    { color:var(--red);font-size:10px;margin-left:6px;display:block;margin-top:3px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar"><h1>VLANs</h1></div>
+
+<div class="container">
+
+  <!-- Push to Pi-hole -->
+  <div class="section-title">Push to Pi-hole</div>
+  <p class="hint" style="margin-bottom:14px">
+    A push also publishes each VLAN's hostnames as fleet-wide DNS records (so they resolve from any
+    VLAN or node, not just the one that handed out the lease) and assigns each VLAN's clients to its
+    configured Pi-hole group, if set below.
+  </p>
+  <div class="push-row">
+    <button class="push-btn" id="push-btn" onclick="triggerPush()">Push scopes to all Pi-holes</button>
+    <button class="preview-btn" onclick="previewConf()">Preview generated config</button>
+    <span class="push-status" id="push-status"></span>
+  </div>
+  <div class="log-card">
+    <div class="log-header">Push log <span id="log-ts"></span></div>
+    <div class="log-body" id="log-body">Ready.</div>
+  </div>
+
+  <!-- Stale lease conflicts -->
+  <div class="section-title">Stale lease conflicts</div>
+  <p class="hint" style="margin-bottom:14px">
+    A known Pi-hole footgun: giving a client a static reservation doesn't retroactively evict a dynamic
+    lease it already holds — the lease database can keep answering with the old IP until it's cleared.
+    This checks every node's active leases against every static reservation (primary scope and all VLANs).
+  </p>
+  <div class="push-row">
+    <button class="preview-btn" onclick="checkLeaseConflicts()">Check now</button>
+    <span class="hint" id="conflicts-summary"></span>
+  </div>
+  <div id="conflicts-list" style="margin-bottom:28px"></div>
+
+  <!-- New VLAN -->
+  <div class="section-title">Create VLAN</div>
+  <div class="form-card">
+    <div class="form-grid">
+      <div class="form-field"><label>Name</label><input id="f-name" placeholder="Guest Wireless"></div>
+      <div class="form-field"><label>VLAN Tag (802.1Q)</label><input id="f-vlan-tag" placeholder="20"></div>
+      <div class="form-field"><label>Subnet</label><input id="f-subnet" placeholder="192.168.20.0"></div>
+      <div class="form-field"><label>Prefix</label><input id="f-prefix" placeholder="24"></div>
+      <div class="form-field"><label>Gateway</label><input id="f-gateway" placeholder="192.168.20.1"></div>
+      <div class="form-field"><label>Range Start</label><input id="f-range-start" placeholder="192.168.20.10"></div>
+      <div class="form-field"><label>Range End</label><input id="f-range-end" placeholder="192.168.20.250"></div>
+      <div class="form-field"><label>Lease Time</label><input id="f-lease" placeholder="12h" value="12h"></div>
+      <div class="form-field"><label>Conditional Forward Domain (optional)</label><input id="f-cf-domain" placeholder="guest.lan"></div>
+      <div class="form-field"><label>Pi-hole Group (optional)</label><input id="f-group-name" placeholder="Kids Devices"></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn-primary" onclick="createVlan()">Create VLAN</button>
+      <span class="form-error" id="f-error"></span>
+    </div>
+  </div>
+
+  <!-- VLAN list -->
+  <div class="section-title">Configured VLANs</div>
+  <div id="vlan-list"></div>
+  <div id="vlan-empty" class="empty-state" style="display:none">No VLANs configured yet</div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allVlans = [];
+let openVlan = null;
+let hostSortAsc = true;
+
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function ipNum(ip) { return (ip||'').split('.').reduce((a,o)=>a*256+parseInt(o||0,10), 0); }
+function safeId(s) { return (s||'').replace(/[.:]/g,'_'); }
+
+async function loadVlans() {
+  const r = await fetch('/api/vlans');
+  const d = await r.json();
+  allVlans = d.vlans || [];
+  renderVlans();
+}
+
+function sortedHosts(hosts) {
+  return [...(hosts||[])].sort((a,b) => hostSortAsc ? ipNum(a.ip)-ipNum(b.ip) : ipNum(b.ip)-ipNum(a.ip));
+}
+
+function toggleHostSort() {
+  hostSortAsc = !hostSortAsc;
+  renderVlans();
+}
+
+function hostRow(vlanId, h) {
+  const sid = safeId(vlanId) + '-' + safeId(h.ip);
+  const dynBadge = h.dynamic ? '<span class="vlan-tag" title="Active DHCP lease, no static reservation yet — edit it to reserve">DYNAMIC</span>' : '';
+  const delCell = h.dynamic ? '' : `<button class="del-btn" onclick="deleteHost(event,'${vlanId}','${h.ip}')">✕</button>`;
+  return `<tr>
+    <td class="ip" id="cell-ip-${sid}"><span onclick="startEditIp('${vlanId}','${h.ip}')" title="Click to edit">${esc(h.ip)}</span>${dynBadge}</td>
+    <td>${esc(h.hostname) || '<span style="color:var(--muted)">—</span>'}</td>
+    <td class="mac" id="cell-mac-${sid}"><span onclick="startEditMac('${vlanId}','${h.ip}','${h.mac}')" title="Click to edit">${esc(h.mac)}</span></td>
+    <td>${delCell}</td>
+  </tr>`;
+}
+
+function renderVlans() {
+  document.getElementById('vlan-empty').style.display = allVlans.length ? 'none' : '';
+  const arrow = hostSortAsc ? '↑' : '↓';
+
+  document.getElementById('vlan-list').innerHTML = allVlans.map(v => {
+    const open = openVlan === v.id;
+    const isPrimary = !!v.is_primary;
+    const hostRows = sortedHosts(v.hosts).map(h => hostRow(v.id, h)).join('');
+
+    return `
+    <div class="vlan-card">
+      <div class="vlan-header" onclick="toggleVlan('${v.id}')">
+        <div class="vlan-header-left">
+          <svg class="vlan-chevron ${open ? 'open' : ''}" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
+          <div>
+            <span class="vlan-title">${esc(v.name)}</span>
+            ${isPrimary ? '<span class="vlan-tag">Primary</span>' : (v.vlan_tag ? `<span class="vlan-tag">VLAN ${esc(String(v.vlan_tag))}</span>` : '')}
+            <div class="vlan-sub">${esc(v.subnet)}/${v.prefix} · gw ${esc(v.gateway)}</div>
+          </div>
+        </div>
+        <div class="vlan-actions">
+          <span style="color:var(--muted);font-size:12px">${(v.hosts||[]).length} host(s)</span>
+          ${!open ? '<span class="vlan-hint">Click to assign IPs →</span>' : ''}
+          ${isPrimary ? '' : `<button class="del-btn" onclick="deleteVlan(event,'${v.id}','${esc(v.name)}')">Delete VLAN</button>`}
+        </div>
+      </div>
+      <div class="vlan-body ${open ? 'open' : ''}" id="body-${v.id}">
+        <div class="vlan-meta">
+          <div class="meta-item"><span class="meta-label">Range</span><span class="meta-value">${esc(v.range_start)} – ${esc(v.range_end)}</span></div>
+          <div class="meta-item"><span class="meta-label">Netmask</span><span class="meta-value">${esc(netmaskOf(v))}</span></div>
+          <div class="meta-item"><span class="meta-label">Lease</span><span class="meta-value">${esc(v.lease_time)}</span></div>
+          ${!isPrimary ? `<div class="meta-item"><span class="meta-label">Cond. Forward</span><span class="meta-value" id="cf-${v.id}" onclick="startEditCf('${v.id}','${esc(v.cf_domain||'')}')" title="Click to edit" style="cursor:pointer">${esc(v.cf_domain) || '<span style=\\'color:var(--muted)\\'>none — click to set</span>'}</span></div>` : ''}
+          ${!isPrimary ? `<div class="meta-item"><span class="meta-label">Pi-hole Group</span><span class="meta-value" id="grp-${v.id}" onclick="startEditGroup('${v.id}','${esc(v.group_name||'')}')" title="Click to edit" style="cursor:pointer">${esc(v.group_name) || '<span style=\\'color:var(--muted)\\'>none — click to set</span>'}</span></div>` : ''}
+        </div>
+        <table>
+          <thead><tr>
+            <th class="sortable" onclick="toggleHostSort()">IP <span>${arrow}</span></th>
+            <th>Hostname</th><th>MAC</th><th></th>
+          </tr></thead>
+          <tbody>${hostRows || ''}</tbody>
+        </table>
+        ${!hostRows ? '<div class="empty-state">No hosts assigned yet</div>' : ''}
+        <div class="host-form">
+          <input placeholder="AA:BB:CC:DD:EE:FF" id="h-mac-${v.id}">
+          <input placeholder="${v.subnet.split('.').slice(0,3).join('.')}.x" id="h-ip-${v.id}">
+          <input class="hostname" placeholder="hostname (optional)" id="h-name-${v.id}">
+          <button class="host-save" onclick="addHost('${v.id}')">Add host</button>
+          <span class="host-status" id="h-status-${v.id}"></span>
+        </div>
+        ${isPrimary ? `
+        <p class="hint" style="margin-top:22px">Changes here are kept in sync across all Pi-holes automatically —
+        see the <a href="/replication" style="color:var(--blue)">Replication</a> tab.</p>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function netmaskOf(v) {
+  const bits = v.prefix;
+  const mask = [];
+  for (let i = 0; i < 4; i++) {
+    const n = Math.max(0, Math.min(8, bits - i*8));
+    mask.push(256 - Math.pow(2, 8-n));
+  }
+  return mask.join('.');
+}
+
+function toggleVlan(id) {
+  openVlan = openVlan === id ? null : id;
+  renderVlans();
+}
+
+async function createVlan() {
+  const errEl = document.getElementById('f-error');
+  errEl.textContent = '';
+  const body = {
+    name: document.getElementById('f-name').value.trim(),
+    vlan_tag: document.getElementById('f-vlan-tag').value.trim(),
+    subnet: document.getElementById('f-subnet').value.trim(),
+    prefix: document.getElementById('f-prefix').value.trim(),
+    gateway: document.getElementById('f-gateway').value.trim(),
+    range_start: document.getElementById('f-range-start').value.trim(),
+    range_end: document.getElementById('f-range-end').value.trim(),
+    lease_time: document.getElementById('f-lease').value.trim() || '12h',
+    cf_domain: document.getElementById('f-cf-domain').value.trim(),
+    group_name: document.getElementById('f-group-name').value.trim(),
+  };
+  const r = await fetch('/api/vlans', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json();
+  if (!d.ok) { errEl.textContent = d.error || 'Failed to create VLAN'; return; }
+  ['f-name','f-vlan-tag','f-subnet','f-prefix','f-gateway','f-range-start','f-range-end','f-cf-domain','f-group-name'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-lease').value = '12h';
+  openVlan = d.vlan.id;
+  await loadVlans();
+  document.getElementById(`body-${d.vlan.id}`)?.scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+async function deleteVlan(evt, id, name) {
+  evt.stopPropagation();
+  if (!confirm(`Delete VLAN "${name}" and all its host assignments?`)) return;
+  await fetch(`/api/vlans/${id}`, {method:'DELETE'});
+  await loadVlans();
+}
+
+async function addHost(vlanId) {
+  const mac = document.getElementById(`h-mac-${vlanId}`).value.trim();
+  const ip = document.getElementById(`h-ip-${vlanId}`).value.trim();
+  const hostname = document.getElementById(`h-name-${vlanId}`).value.trim();
+  const stEl = document.getElementById(`h-status-${vlanId}`);
+  stEl.className = 'host-status'; stEl.textContent = 'Saving…';
+  const r = await fetch(`/api/vlans/${vlanId}/hosts`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mac, ip, hostname})});
+  const d = await r.json();
+  if (!d.ok) { stEl.className = 'host-status error'; stEl.textContent = d.error || 'Failed'; return; }
+  openVlan = vlanId;
+  await loadVlans();
+}
+
+async function deleteHost(evt, vlanId, ip) {
+  evt.stopPropagation();
+  if (!confirm(`Remove reservation for ${ip}?`)) return;
+  await fetch(`/api/vlans/${vlanId}/hosts/${ip}`, {method:'DELETE'});
+  openVlan = vlanId;
+  await loadVlans();
+}
+
+// --- Inline cell editing (IP or MAC) ---
+function startEditIp(vlanId, ip) {
+  const sid = safeId(vlanId) + '-' + safeId(ip);
+  const cell = document.getElementById(`cell-ip-${sid}`);
+  if (!cell) return;
+  cell.innerHTML = `
+    <input class="edit-input" id="edit-ip-${sid}" value="${ip}">
+    <button class="edit-save" onclick="saveIp('${vlanId}','${ip}','${sid}')">✓</button>
+    <button class="edit-cancel" onclick="renderVlans()">✗</button>
+    <span class="edit-err" id="edit-ip-err-${sid}"></span>`;
+  document.getElementById(`edit-ip-${sid}`)?.focus();
+}
+
+async function saveIp(vlanId, oldIp, sid) {
+  const input = document.getElementById(`edit-ip-${sid}`);
+  const errEl = document.getElementById(`edit-ip-err-${sid}`);
+  const newIp = input.value.trim();
+  if (!newIp) { errEl.textContent = 'Required'; return; }
+  const vlan = allVlans.find(v => v.id === vlanId);
+  const host = (vlan?.hosts || []).find(h => h.ip === oldIp);
+  if (!host) { errEl.textContent = 'Host not found'; return; }
+  // Keyed by mac, so this replaces the old entry in place — works whether
+  // the row was already a static reservation or just a dynamic lease.
+  const r = await fetch(`/api/vlans/${vlanId}/hosts`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mac: host.mac, ip: newIp, hostname: host.hostname})});
+  const d = await r.json();
+  if (!d.ok) { errEl.textContent = d.error || 'Failed'; return; }
+  openVlan = vlanId;
+  await loadVlans();
+}
+
+function startEditCf(vlanId, current) {
+  const el = document.getElementById(`cf-${vlanId}`);
+  if (!el) return;
+  el.innerHTML = `
+    <input class="edit-input" id="edit-cf-${vlanId}" value="${esc(current)}" placeholder="guest.lan">
+    <button class="edit-save" onclick="saveCf('${vlanId}')">✓</button>
+    <button class="edit-cancel" onclick="renderVlans()">✗</button>
+    <span class="edit-err" id="edit-cf-err-${vlanId}"></span>`;
+  document.getElementById(`edit-cf-${vlanId}`)?.focus();
+}
+
+async function saveCf(vlanId) {
+  const input = document.getElementById(`edit-cf-${vlanId}`);
+  const errEl = document.getElementById(`edit-cf-err-${vlanId}`);
+  const r = await fetch(`/api/vlans/${vlanId}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({cf_domain: input.value.trim()})});
+  const d = await r.json();
+  if (!d.ok) { errEl.textContent = d.error || 'Failed'; return; }
+  openVlan = vlanId;
+  await loadVlans();
+}
+
+function startEditGroup(vlanId, current) {
+  const el = document.getElementById(`grp-${vlanId}`);
+  if (!el) return;
+  el.innerHTML = `
+    <input class="edit-input" id="edit-grp-${vlanId}" value="${esc(current)}" placeholder="Kids Devices">
+    <button class="edit-save" onclick="saveGroup('${vlanId}')">✓</button>
+    <button class="edit-cancel" onclick="renderVlans()">✗</button>
+    <span class="edit-err" id="edit-grp-err-${vlanId}"></span>`;
+  document.getElementById(`edit-grp-${vlanId}`)?.focus();
+}
+
+async function saveGroup(vlanId) {
+  const input = document.getElementById(`edit-grp-${vlanId}`);
+  const errEl = document.getElementById(`edit-grp-err-${vlanId}`);
+  const r = await fetch(`/api/vlans/${vlanId}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({group_name: input.value.trim()})});
+  const d = await r.json();
+  if (!d.ok) { errEl.textContent = d.error || 'Failed'; return; }
+  openVlan = vlanId;
+  await loadVlans();
+}
+
+function startEditMac(vlanId, ip, mac) {
+  const sid = safeId(vlanId) + '-' + safeId(ip);
+  const cell = document.getElementById(`cell-mac-${sid}`);
+  if (!cell) return;
+  cell.innerHTML = `
+    <input class="edit-input" id="edit-mac-${sid}" value="${mac}">
+    <button class="edit-save" onclick="saveMac('${vlanId}','${ip}','${sid}')">✓</button>
+    <button class="edit-cancel" onclick="renderVlans()">✗</button>
+    <span class="edit-err" id="edit-mac-err-${sid}"></span>`;
+  document.getElementById(`edit-mac-${sid}`)?.focus();
+}
+
+async function saveMac(vlanId, ip, sid) {
+  const input = document.getElementById(`edit-mac-${sid}`);
+  const errEl = document.getElementById(`edit-mac-err-${sid}`);
+  const newMac = input.value.trim().toUpperCase();
+  if (!newMac) { errEl.textContent = 'Required'; return; }
+  const vlan = allVlans.find(v => v.id === vlanId);
+  const host = (vlan?.hosts || []).find(h => h.ip === ip);
+  if (!host) { errEl.textContent = 'Host not found'; return; }
+  let r;
+  if (host.dynamic) {
+    // No static reservation exists yet at this ip — create one instead of patching.
+    r = await fetch(`/api/vlans/${vlanId}/hosts`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mac: newMac, ip: host.ip, hostname: host.hostname})});
+  } else {
+    r = await fetch(`/api/vlans/${vlanId}/hosts/${ip}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mac:newMac})});
+  }
+  const d = await r.json();
+  if (!d.ok) { errEl.textContent = d.error || 'Failed'; return; }
+  openVlan = vlanId;
+  await loadVlans();
+}
+
+// --- Push (extra VLANs -> dnsmasq.d) ---
+let pushPoller = null;
+function renderPushStatus(data) {
+  const st = document.getElementById('push-status');
+  const btn = document.getElementById('push-btn');
+  const log = document.getElementById('log-body');
+  const ts = document.getElementById('log-ts');
+  if (data.status && data.status !== 'idle') {
+    st.className = 'push-status ' + data.status;
+    st.textContent = data.message || data.status;
+    st.style.display = '';
+  } else { st.style.display = 'none'; }
+  btn.disabled = data.status === 'running';
+  ts.textContent = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '';
+  const lines = data.log || [];
+  log.textContent = lines.length ? lines.join('\n') : 'Ready.';
+  log.scrollTop = log.scrollHeight;
+}
+async function pollPush() {
+  try { const r = await fetch('/api/push/status'); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
+async function triggerPush() {
+  const btn = document.getElementById('push-btn');
+  btn.disabled = true;
+  await fetch('/api/push', {method:'POST'});
+  clearInterval(pushPoller);
+  let n = 0;
+  pushPoller = setInterval(async () => {
+    n++;
+    const data = await pollPush();
+    if (data) renderPushStatus(data);
+    if (!data || data.status !== 'running' || n > 40) clearInterval(pushPoller);
+  }, 2000);
+}
+async function refreshPushStatus() { const d = await pollPush(); if (d) renderPushStatus(d); }
+
+async function previewConf() {
+  const r = await fetch('/api/push/preview');
+  const d = await r.json();
+  alert(d.conf || 'Nothing to preview yet — create a VLAN first.');
+}
+
+setInterval(refreshPushStatus, 5000); refreshPushStatus();
+loadVlans();
+
+// --- Stale lease conflicts ---
+async function checkLeaseConflicts() {
+  document.getElementById('conflicts-summary').textContent = 'Checking…';
+  const r = await fetch('/api/lease-conflicts');
+  const d = await r.json();
+  renderConflicts(d.conflicts || []);
+}
+
+function renderConflicts(conflicts) {
+  const summary = document.getElementById('conflicts-summary');
+  const list = document.getElementById('conflicts-list');
+  if (!conflicts.length) {
+    summary.textContent = 'No conflicts found.';
+    list.innerHTML = '';
+    return;
+  }
+  summary.textContent = `${conflicts.length} conflict(s) found.`;
+  list.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr>
+      <th style="text-align:left;padding:8px 12px;color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--border)">MAC</th>
+      <th style="text-align:left;padding:8px 12px;color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--border)">Reserved IP</th>
+      <th style="text-align:left;padding:8px 12px;color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--border)">Stale leased IP</th>
+      <th style="text-align:left;padding:8px 12px;color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--border)">Node</th>
+      <th style="border-bottom:1px solid var(--border)"></th>
+    </tr></thead>
+    <tbody>${conflicts.map(c => `
+      <tr>
+        <td style="padding:8px 12px;font-family:var(--mono);border-bottom:1px solid rgba(45,53,80,.5)">${esc(c.mac)}</td>
+        <td style="padding:8px 12px;font-family:var(--mono);border-bottom:1px solid rgba(45,53,80,.5)">${esc(c.reserved_ip)}</td>
+        <td style="padding:8px 12px;font-family:var(--mono);color:var(--yellow);border-bottom:1px solid rgba(45,53,80,.5)">${esc(c.leased_ip)}</td>
+        <td style="padding:8px 12px;font-family:var(--mono);border-bottom:1px solid rgba(45,53,80,.5)">${esc(c.node)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid rgba(45,53,80,.5)"><button class="del-btn" onclick="clearConflict('${c.node}','${c.leased_ip}')">Clear</button></td>
+      </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+async function clearConflict(node, leasedIp) {
+  if (!confirm(`Clear stale lease ${leasedIp} on ${node}?`)) return;
+  const r = await fetch('/api/lease-conflicts/clear', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({node, leased_ip: leasedIp})});
+  const d = await r.json();
+  if (!d.ok) { alert(d.error || 'Failed to clear lease'); return; }
+  checkLeaseConflicts();
+}
+</script>
+{% endblock %}

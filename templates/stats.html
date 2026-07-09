@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Stats — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:28px; }
+.section-title:first-child { margin-top:0; }
+.hint { font-size:12px;color:var(--muted); }
+
+.tile-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:8px; }
+.tile { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px; }
+.tile-label { font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px; }
+.tile-value { font-size:22px;font-weight:700;font-family:var(--mono); }
+.tile-value.blocked { color:var(--red); }
+
+.node-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px; }
+.node-card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px; }
+.node-ip { font-size:13px;font-weight:700;font-family:var(--mono);margin-bottom:8px;display:flex;align-items:center;gap:8px; }
+.dot { width:8px;height:8px;border-radius:50%;flex-shrink:0; }
+.dot.up { background:var(--green); } .dot.down { background:var(--red); }
+.node-stat { display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px; }
+.node-stat span:last-child { font-family:var(--mono);font-weight:600; }
+
+table { width:100%;border-collapse:collapse;font-size:13px; }
+th { text-align:left;padding:8px 12px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--border); }
+td { padding:8px 12px;border-bottom:1px solid rgba(45,53,80,.5); }
+.count-cell { font-family:var(--mono);text-align:right; }
+.two-col { display:grid;grid-template-columns:1fr 1fr;gap:20px; }
+@media (max-width:900px) { .two-col { grid-template-columns:1fr; } }
+.card { background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar"><h1>Stats</h1></div>
+
+<div class="container">
+  <p class="hint" style="margin-bottom:16px">
+    Pi-hole's own dashboard only ever shows one node — this merges query totals and top domains/clients
+    across the whole fleet. Top lists are summed from each node's own top-10, not an exhaustive per-domain
+    count, so treat this as "what's dominating right now," not a precise long-tail source of truth.
+  </p>
+
+  <div class="section-title">Fleet totals</div>
+  <div class="tile-grid" id="tiles"></div>
+
+  <div class="section-title">Per node</div>
+  <div class="node-grid" id="node-grid"></div>
+
+  <div class="section-title">Top across the fleet</div>
+  <div class="two-col">
+    <div class="card">
+      <table>
+        <thead><tr><th>Domain</th><th style="text-align:right">Queries</th></tr></thead>
+        <tbody id="domains-body"></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Client</th><th style="text-align:right">Queries</th></tr></thead>
+        <tbody id="clients-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmt(n) { return (n||0).toLocaleString(); }
+
+async function load() {
+  const r = await fetch('/api/stats');
+  const d = await r.json();
+  render(d);
+}
+
+function render(d) {
+  const t = d.totals || {};
+  document.getElementById('tiles').innerHTML = `
+    <div class="tile"><div class="tile-label">Total queries</div><div class="tile-value">${fmt(t.total)}</div></div>
+    <div class="tile"><div class="tile-label">Blocked</div><div class="tile-value blocked">${fmt(t.blocked)}</div></div>
+    <div class="tile"><div class="tile-label">% blocked</div><div class="tile-value">${(t.percent_blocked||0).toFixed(1)}%</div></div>
+    <div class="tile"><div class="tile-label">Forwarded</div><div class="tile-value">${fmt(t.forwarded)}</div></div>
+    <div class="tile"><div class="tile-label">Cached</div><div class="tile-value">${fmt(t.cached)}</div></div>
+  `;
+
+  const nodes = d.nodes || {};
+  document.getElementById('node-grid').innerHTML = Object.entries(nodes).map(([ip, n]) => {
+    const q = n.summary || {};
+    return `
+    <div class="node-card">
+      <div class="node-ip"><span class="dot ${n.reachable ? 'up' : 'down'}"></span>${esc(ip)}</div>
+      ${n.reachable ? `
+        <div class="node-stat"><span>Total</span><span>${fmt(q.total)}</span></div>
+        <div class="node-stat"><span>Blocked</span><span>${fmt(q.blocked)}</span></div>
+        <div class="node-stat"><span>% blocked</span><span>${(q.percent_blocked||0).toFixed(1)}%</span></div>
+      ` : '<div class="hint">Unreachable</div>'}
+    </div>`;
+  }).join('');
+
+  document.getElementById('domains-body').innerHTML = (d.top_domains || []).map(x => `
+    <tr><td>${esc(x.domain)}</td><td class="count-cell">${fmt(x.count)}</td></tr>
+  `).join('') || '<tr><td colspan="2" class="hint" style="padding:16px">No data</td></tr>';
+
+  document.getElementById('clients-body').innerHTML = (d.top_clients || []).map(x => `
+    <tr><td>${esc(x.name || x.ip)}${x.name ? ` <span class="hint">(${esc(x.ip)})</span>` : ''}</td><td class="count-cell">${fmt(x.count)}</td></tr>
+  `).join('') || '<tr><td colspan="2" class="hint" style="padding:16px">No data</td></tr>';
+}
+
+setInterval(load, 15000);
+load();
+</script>
+{% endblock %}
