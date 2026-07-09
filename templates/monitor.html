@@ -107,6 +107,12 @@
 {% block scripts %}
 <script>
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function cssId(ip) { return ip.replace(/[^a-zA-Z0-9]/g, '-'); }
+
+// Tracks in-flight reboot/diagnostics calls so the 5s poll's full re-render
+// doesn't wipe out the button's "running" state mid-request.
+const busyReboot = new Set();
+const busyDiag = new Set();
 function fmtUptime(secs) {
   if (!secs) return '—';
   const d = Math.floor(secs/86400), h = Math.floor((secs%86400)/3600), m = Math.floor((secs%3600)/60);
@@ -127,9 +133,12 @@ function sparkline(checks) {
     <div class="sparkline">${bars}</div>`;
 }
 
+let lastState = null;
+
 async function loadState() {
   const r = await fetch('/api/monitor');
   const d = await r.json();
+  lastState = d;
   render(d);
 }
 
@@ -172,8 +181,8 @@ function render(d) {
       <div class="node-row"><span>Last rebooted</span><span>${node.last_rebooted ? new Date(node.last_rebooted).toLocaleString() : 'never'}</span></div>
       ${sparkline(checks)}
       <div class="node-actions">
-        <button class="btn" onclick="rebootNode('${ip}')">Reboot</button>
-        <button class="btn" onclick="runDiag('${ip}')">Diagnostics</button>
+        <button class="btn" id="reboot-btn-${cssId(ip)}" onclick="rebootNode('${ip}')" ${busyReboot.has(ip) ? 'disabled' : ''}>${busyReboot.has(ip) ? 'Rebooting…' : 'Reboot'}</button>
+        <button class="btn" id="diag-btn-${cssId(ip)}" onclick="runDiag('${ip}')" ${busyDiag.has(ip) ? 'disabled' : ''}>${busyDiag.has(ip) ? 'Running…' : 'Diagnostics'}</button>
       </div>
     </div>`;
   }).join('') : '<div class="empty-state">No nodes reporting yet</div>';
@@ -202,14 +211,30 @@ async function setInterval_(minutes) {
 
 async function rebootNode(ip) {
   if (!confirm(`Reboot ${ip}?`)) return;
-  await fetch(`/api/monitor/${ip}/reboot`, {method: 'POST'});
-  alert('Reboot triggered.');
+  busyReboot.add(ip);
+  render(lastState);
+  try {
+    await fetch(`/api/monitor/${ip}/reboot`, {method: 'POST'});
+    alert('Reboot triggered.');
+  } finally {
+    busyReboot.delete(ip);
+    render(lastState);
+  }
 }
 
 async function runDiag(ip) {
-  const r = await fetch(`/api/monitor/${ip}/diag`, {method: 'POST'});
-  const d = await r.json();
-  alert(d.ok ? `Diagnostics OK: ${d.message}` : `Diagnostics failed: ${d.message}`);
+  busyDiag.add(ip);
+  render(lastState);
+  try {
+    const r = await fetch(`/api/monitor/${ip}/diag`, {method: 'POST'});
+    const d = await r.json();
+    alert(d.ok ? `Diagnostics OK: ${d.message}` : `Diagnostics failed: ${d.message}`);
+  } catch (e) {
+    alert(`Diagnostics request failed: ${e}`);
+  } finally {
+    busyDiag.delete(ip);
+    render(lastState);
+  }
 }
 
 async function triggerFailover() {
