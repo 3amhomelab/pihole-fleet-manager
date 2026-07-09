@@ -1,6 +1,6 @@
 services:
   pihole-fleet-manager:
-    build: https://github.com/3amhomelab/pihole-fleet-manager.git#main
+    image: 3amhomelab/pihole-fleet-manager:latest
     container_name: fleet-manager
     ports:
       - "${APP_PORT}:8080"
@@ -29,6 +29,13 @@ services:
       - UNIFI_USER=${UNIFI_USER}
       - UNIFI_PASSWORD=${UNIFI_PASSWORD}
       - UNIFI_SITE=${UNIFI_SITE:-default}
+      - MONITOR_CHECK_INTERVAL=${MONITOR_CHECK_INTERVAL:-60}
+      - MONITOR_DOMAINS=${MONITOR_DOMAINS:-google.com,cloudflare.com}
+      - MONITOR_DNS_RETRIES=${MONITOR_DNS_RETRIES:-3}
+      - MONITOR_REBOOT_AFTER=${MONITOR_REBOOT_AFTER:-3}
+      - MONITOR_REBOOT_RETRIES=${MONITOR_REBOOT_RETRIES:-2}
+      - MONITOR_REBOOT_AFTER_MINUTES=${MONITOR_REBOOT_AFTER_MINUTES:-10}
+      - MONITOR_UPTIME_INTERVAL=${MONITOR_UPTIME_INTERVAL:-300}
       - PORT=8080
       - TZ=${TZ:-UTC}
     restart: unless-stopped

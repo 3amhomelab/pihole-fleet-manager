@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}Health — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.toolbar-actions { display:flex;gap:8px; }
+.btn { background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer; }
+.btn:hover { background:rgba(255,255,255,.06); }
+.btn.danger { color:var(--red); }
+.container { padding:22px 24px;max-width:980px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:28px; }
+.section-title:first-child { margin-top:0; }
+.hint { font-size:12px;color:var(--muted); }
+
+.vip-card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center; }
+.vip-node { font-size:22px;font-weight:700;font-family:var(--mono);color:var(--green); }
+.vip-label { font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px; }
+
+.node-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-bottom:8px; }
+.node-card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px; }
+.node-card.down { border-color:rgba(239,68,68,.4); }
+.node-head { display:flex;justify-content:space-between;align-items:center;margin-bottom:10px; }
+.node-name { font-family:var(--mono);font-weight:700;font-size:14px; }
+.node-badge { font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:3px 8px;border-radius:999px; }
+.node-badge.ok { background:var(--green-bg);color:var(--green); }
+.node-badge.down { background:var(--red-bg);color:var(--red); }
+.node-row { display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px; }
+.node-row span:last-child { color:var(--text); }
+.node-actions { display:flex;gap:6px;margin-top:12px; }
+.node-actions .btn { flex:1;font-size:11px;padding:5px 8px; }
+
+.log-card { background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:28px; }
+.log-header { display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted); }
+.log-body { padding:12px 16px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted);max-height:220px;overflow-y:auto; }
+.log-line { display:flex;gap:10px; }
+.log-ts { color:var(--muted);flex-shrink:0; }
+.empty-state { text-align:center;padding:20px;color:var(--muted);font-size:12px; }
+
+.history-list { display:flex;flex-direction:column;gap:6px; }
+.history-item { display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:8px 12px;border-radius:6px;background:var(--surface);border:1px solid var(--border); }
+.history-move { font-family:var(--mono); }
+.history-ts { color:var(--muted);font-size:11px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <h1>Health</h1>
+  <div class="toolbar-actions">
+    <button class="btn" onclick="triggerFailover()">Manual VIP failover</button>
+    <button class="btn danger" onclick="clearHistory()">Clear history</button>
+  </div>
+</div>
+
+<div class="container">
+  <p class="hint" style="margin-bottom:20px">
+    Three-layer health check per node (ping → DNS → Pi-hole API), with auto-heal escalation for a node
+    that stays down: an SSH reboot after a few consecutive failures, then up to two more retries spaced
+    several minutes apart — gated on cluster quorum so this never fires while the cluster itself may be
+    unhealthy. If retries are exhausted the node is left down and flagged for manual intervention.
+  </p>
+
+  <div class="section-title">VIP master</div>
+  <div class="vip-card">
+    <div>
+      <div class="vip-label">Currently holds the VIP</div>
+      <div class="vip-node" id="vip-master">—</div>
+    </div>
+    <div class="hint" id="vip-addr"></div>
+  </div>
+
+  <div class="section-title">Nodes</div>
+  <div class="node-grid" id="node-grid"></div>
+
+  <div class="section-title">Failure log</div>
+  <div class="log-card">
+    <div class="log-header">Recent failures</div>
+    <div class="log-body" id="failure-log">Loading…</div>
+  </div>
+
+  <div class="section-title">VIP master history</div>
+  <div class="history-list" id="history-list"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fmtUptime(secs) {
+  if (!secs) return '—';
+  const d = Math.floor(secs/86400), h = Math.floor((secs%86400)/3600), m = Math.floor((secs%3600)/60);
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+async function loadState() {
+  const r = await fetch('/api/monitor');
+  const d = await r.json();
+  render(d);
+}
+
+function render(d) {
+  document.getElementById('vip-master').textContent = d.vip_master || '(undetected)';
+  document.getElementById('vip-addr').textContent = d.vip ? `VIP: ${d.vip}` : 'PIHOLE_VIP not configured';
+
+  const piholes = d.piholes || {};
+  const ips = Object.keys(piholes);
+  document.getElementById('node-grid').innerHTML = ips.length ? ips.map(ip => {
+    const node = piholes[ip];
+    const checks = node.checks || [];
+    const last = checks[checks.length - 1];
+    const ok = last ? last.ok : null;
+    const isVip = ip === d.vip;
+    return `
+    <div class="node-card ${ok === false ? 'down' : ''}">
+      <div class="node-head">
+        <span class="node-name">${esc(ip)}</span>
+        <span class="node-badge ${ok ? 'ok' : 'down'}">${ok === null ? 'unknown' : ok ? 'up' : 'down'}</span>
+      </div>
+      <div class="node-row"><span>Last check</span><span>${last ? esc(last.reason) + ' (' + last.ms + 'ms)' : '—'}</span></div>
+      <div class="node-row"><span>Uptime</span><span>${fmtUptime(node.uptime_secs)}</span></div>
+      <div class="node-row"><span>Blocking</span><span>${node.blocking === undefined ? '—' : (node.blocking ? 'enabled' : 'disabled')}</span></div>
+      <div class="node-row"><span>Queries (24h)</span><span>${node.stats ? `${node.stats.total} (${node.stats.percent}% blocked)` : '—'}</span></div>
+      <div class="node-row"><span>Last rebooted</span><span>${node.last_rebooted ? new Date(node.last_rebooted).toLocaleString() : 'never'}</span></div>
+      ${isVip ? '' : `
+      <div class="node-actions">
+        <button class="btn" onclick="rebootNode('${ip}')">Reboot</button>
+        <button class="btn" onclick="runDiag('${ip}')">Diagnostics</button>
+      </div>`}
+    </div>`;
+  }).join('') : '<div class="empty-state">No nodes reporting yet</div>';
+
+  const log = (d.failure_log || []).slice().reverse();
+  document.getElementById('failure-log').innerHTML = log.length ? log.map(f => `
+    <div class="log-line"><span class="log-ts">${new Date(f.ts*1000).toLocaleString()}</span><span>${esc(f.name)} — ${esc(f.reason)}</span></div>
+  `).join('') : 'No failures recorded.';
+
+  const history = (d.vip_history || []).slice().reverse();
+  document.getElementById('history-list').innerHTML = history.length ? history.map(h => `
+    <div class="history-item">
+      <span class="history-move">${esc(h.from) || '<em>none</em>'} → ${esc(h.to)}</span>
+      <span class="history-ts">${new Date(h.ts).toLocaleString()}</span>
+    </div>`).join('') : '<div class="empty-state">No VIP master changes recorded yet</div>';
+}
+
+async function rebootNode(ip) {
+  if (!confirm(`Reboot ${ip}?`)) return;
+  await fetch(`/api/monitor/${ip}/reboot`, {method: 'POST'});
+  alert('Reboot triggered.');
+}
+
+async function runDiag(ip) {
+  const r = await fetch(`/api/monitor/${ip}/diag`, {method: 'POST'});
+  const d = await r.json();
+  alert(d.ok ? `Diagnostics OK: ${d.message}` : `Diagnostics failed: ${d.message}`);
+}
+
+async function triggerFailover() {
+  if (!confirm('Manually fail over the VIP to the backup node?')) return;
+  const r = await fetch('/api/monitor/failover', {method: 'POST'});
+  const d = await r.json();
+  alert(d.message);
+  loadState();
+}
+
+async function clearHistory() {
+  if (!confirm('Clear all health check history, VIP history, and failure log?')) return;
+  await fetch('/api/monitor/clear', {method: 'POST'});
+  loadState();
+}
+
+setInterval(loadState, 5000);
+loadState();
+</script>
+{% endblock %}

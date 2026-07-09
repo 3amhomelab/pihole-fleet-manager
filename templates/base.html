@@ -100,6 +100,12 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
 
   <div class="nav-section">
     <span class="nav-label">Monitoring</span>
+    <a href="/monitor" class="nav-item {{ 'active' if active_page == 'monitor' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1.5 8.5h3l1.5-4 3 7 1.5-3h3.5"/>
+      </svg>
+      Health
+    </a>
     <a href="/stats" class="nav-item {{ 'active' if active_page == 'stats' else '' }}">
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
         <path d="M2 13.5h12M4 13.5V8M8 13.5V4M12 13.5v-6"/>

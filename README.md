@@ -156,18 +156,20 @@ on every deploy, as a fallback for the one stack it manages.
 
 ## Running
 
-Build and run the container, mounting a volume at `/data` and supplying the
-environment variables above:
+Pull the pre-built image from Docker Hub and run it, mounting a volume at
+`/data` and supplying the environment variables above:
 
 ```bash
-docker build -t pihole-fleet-manager .
 docker run -d \
   -p 8080:8080 \
   -v pihole_fleet_manager_data:/data \
   -e PIHOLE_IPS=<node-ip-1>,<node-ip-2>,<node-ip-3> \
   -e PIHOLE_ADMIN_PASSWORD=<password> \
-  pihole-fleet-manager
+  3amhomelab/pihole-fleet-manager:latest
 ```
+
+Or use the included `docker-compose.yml` / `docker-compose.env` (copy the
+latter to `.env` and fill in your values) with `docker compose up -d`.
 
 On first run, use the **Setup** tab (or `POST /api/setup/run`) to bootstrap
 SSH trust to each node with a one-time password — no key needs to be

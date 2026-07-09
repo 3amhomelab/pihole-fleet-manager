@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Pihole Fleet Manager — manages the Pi-hole cluster: extra DHCP scopes (VLANs)
 on top of Pi-hole's single built-in scope, config replication, software
-auto-updates, and notifications, all pushed/synced across every Pi-hole node."""
+auto-updates, and node health monitoring (ping/DNS/API checks, uptime, VIP
+master detection, auto-heal escalation), all across every Pi-hole node."""
 import os
 
 from flask import Flask, jsonify, render_template, request
 
 from workers import (
     activity_log, dhcp_failover, external_dhcp, gravity, lease_conflicts,
-    pihole_push, primary_dhcp, recovery, replication, setup, stats,
+    monitor, pihole_push, primary_dhcp, recovery, replication, setup, stats,
     store, updater,
 )
 
@@ -48,6 +49,11 @@ def page_updater():
 @app.route("/failover")
 def page_failover():
     return render_template("failover.html", active_page="failover")
+
+
+@app.route("/monitor")
+def page_monitor():
+    return render_template("monitor.html", active_page="monitor")
 
 
 @app.route("/stats")
@@ -381,6 +387,50 @@ def api_failover_set_enabled():
     return jsonify(dhcp_failover.set_enabled(bool(data.get("enabled"))))
 
 
+# --- Node health monitoring (ping/DNS/API checks, uptime, VIP master, auto-heal) ---
+
+@app.route("/api/monitor")
+def api_monitor_state():
+    return jsonify(monitor.get_state())
+
+
+@app.route("/api/monitor/interval", methods=["POST"])
+def api_monitor_set_interval():
+    data = request.get_json(silent=True) or {}
+    try:
+        seconds = int(data.get("seconds", 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "seconds must be a number"}), 400
+    monitor.set_interval(seconds)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/monitor/<path:ip>/reboot", methods=["POST"])
+def api_monitor_reboot(ip):
+    if ip not in monitor.PIHOLE_IPS:
+        return jsonify({"ok": False, "error": "Not a configured Pi-hole node"}), 400
+    monitor.reboot(ip)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/monitor/<path:ip>/diag", methods=["POST"])
+def api_monitor_diag(ip):
+    ok, msg = monitor.run_diagnostics(ip)
+    return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/monitor/failover", methods=["POST"])
+def api_monitor_failover():
+    ok, msg = monitor.trigger_failover()
+    return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/monitor/clear", methods=["POST"])
+def api_monitor_clear():
+    monitor.clear_history()
+    return jsonify({"ok": True})
+
+
 # --- Activity log ---
 
 @app.route("/api/log")
@@ -431,4 +481,5 @@ if __name__ == "__main__":
     dhcp_failover.start()
     gravity.start()
     external_dhcp.start()
+    monitor.start()
     app.run(host="0.0.0.0", port=PORT)
