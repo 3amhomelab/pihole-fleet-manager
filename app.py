@@ -5,7 +5,7 @@ auto-updates, and node health monitoring (ping/DNS/API checks, uptime, VIP
 master detection, auto-heal escalation), all across every Pi-hole node."""
 import os
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 from workers import (
     activity_log, dhcp_failover, external_dhcp, gravity, lease_conflicts,
@@ -417,6 +417,19 @@ def api_monitor_reboot(ip):
 def api_monitor_diag(ip):
     ok, msg = monitor.run_diagnostics(ip)
     return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/monitor/diagnostics")
+def api_monitor_diagnostics_list():
+    return jsonify({"reports": monitor.list_diagnostics()})
+
+
+@app.route("/api/monitor/diagnostics/<path:name>")
+def api_monitor_diagnostics_get(name):
+    content = monitor.get_diagnostics_report(name)
+    if content is None:
+        return jsonify({"ok": False, "error": "Not found"}), 404
+    return Response(content, mimetype="text/plain")
 
 
 @app.route("/api/monitor/failover", methods=["POST"])

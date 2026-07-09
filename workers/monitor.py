@@ -560,9 +560,15 @@ def trigger_failover() -> tuple:
     return _failover_vip()
 
 
+DIAG_DIR      = os.environ.get("MONITOR_DIAG_DIR", "/data/diagnostics")
+MAX_DIAG_REPORTS = 50
+
+
 def run_diagnostics(ip: str) -> tuple:
     """Run collect-diag.sh on a node (expects the same keepalived diagnostics
-    script used by the original Network-Health monitor)."""
+    script used by the original Network-Health monitor), then pull the
+    generated report back over SSH and save it into fleet-manager's own
+    /data volume — the report otherwise only ever exists on that one node."""
     if ip == PIHOLE_VIP or ip not in PIHOLE_IPS:
         return False, "Invalid target"
     try:
@@ -570,12 +576,64 @@ def run_diagnostics(ip: str) -> tuple:
         output = (r.stdout + r.stderr).strip()
         if r.returncode != 0:
             return False, output[-150:] or f"exit {r.returncode}"
-        last_line = output.splitlines()[-1] if output else "Diagnostics collected"
-        return True, last_line
+
+        last_line = output.splitlines()[-1] if output else ""
+        remote_path = last_line.removeprefix("Diagnostics written to ").strip()
+        if not remote_path:
+            return False, "Ran, but couldn't determine the remote report path"
+
+        cat_r = _ssh_cmd(ip, f"sudo cat {remote_path}", timeout=15)
+        if cat_r.returncode != 0:
+            return False, f"Ran, but couldn't fetch the report: {cat_r.stderr.strip()[:100]}"
+
+        os.makedirs(DIAG_DIR, exist_ok=True)
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        local_name = f"{_node_label(ip)}-{ts}.log"
+        tmp = os.path.join(DIAG_DIR, local_name + ".tmp")
+        with open(tmp, "w") as f:
+            f.write(cat_r.stdout)
+        os.replace(tmp, os.path.join(DIAG_DIR, local_name))
+
+        for old in sorted(os.listdir(DIAG_DIR))[:-MAX_DIAG_REPORTS]:
+            try:
+                os.remove(os.path.join(DIAG_DIR, old))
+            except OSError:
+                pass
+
+        activity_log.log("monitor", f"Diagnostics saved for {_node_label(ip)}: {local_name}")
+        return True, f"Saved as {local_name}"
     except subprocess.TimeoutExpired:
         return False, "Timed out"
     except Exception as e:
         return False, str(e)[:150]
+
+
+def list_diagnostics() -> list:
+    """Saved diagnostic reports, newest first."""
+    try:
+        reports = []
+        for name in os.listdir(DIAG_DIR):
+            path = os.path.join(DIAG_DIR, name)
+            reports.append({
+                "name": name,
+                "size": os.path.getsize(path),
+                "mtime": os.path.getmtime(path),
+            })
+        reports.sort(key=lambda r: r["mtime"], reverse=True)
+        return reports
+    except FileNotFoundError:
+        return []
+
+
+def get_diagnostics_report(name: str):
+    """Read a saved report's content by filename. Strips any path components
+    so this can't be used to read arbitrary files outside DIAG_DIR."""
+    safe_name = os.path.basename(name)
+    path = os.path.join(DIAG_DIR, safe_name)
+    if not os.path.isfile(path):
+        return None
+    with open(path) as f:
+        return f.read()
 
 
 def clear_history():

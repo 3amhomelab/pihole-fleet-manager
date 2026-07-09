@@ -97,6 +97,9 @@
     <div class="log-body" id="failure-log">Loading…</div>
   </div>
 
+  <div class="section-title">Saved diagnostics</div>
+  <div class="history-list" id="diag-list" style="margin-bottom:8px"></div>
+
   <div id="vip-history-section">
     <div class="section-title">VIP master history</div>
     <div class="history-list" id="history-list"></div>
@@ -140,6 +143,20 @@ async function loadState() {
   const d = await r.json();
   lastState = d;
   render(d);
+}
+
+async function loadDiagnostics() {
+  const r = await fetch('/api/monitor/diagnostics');
+  const d = await r.json();
+  const reports = d.reports || [];
+  document.getElementById('diag-list').innerHTML = reports.length ? reports.map(rep => `
+    <div class="history-item">
+      <span class="history-move">${esc(rep.name)} <span class="history-ts">(${(rep.size/1024).toFixed(1)} KB)</span></span>
+      <span>
+        <span class="history-ts">${new Date(rep.mtime*1000).toLocaleString()}</span>
+        <a class="btn" style="margin-left:8px;text-decoration:none;display:inline-block" href="/api/monitor/diagnostics/${encodeURIComponent(rep.name)}" target="_blank">View</a>
+      </span>
+    </div>`).join('') : '<div class="empty-state">No diagnostics reports saved yet</div>';
 }
 
 function render(d) {
@@ -229,6 +246,7 @@ async function runDiag(ip) {
     const r = await fetch(`/api/monitor/${ip}/diag`, {method: 'POST'});
     const d = await r.json();
     alert(d.ok ? `Diagnostics OK: ${d.message}` : `Diagnostics failed: ${d.message}`);
+    if (d.ok) loadDiagnostics();
   } catch (e) {
     alert(`Diagnostics request failed: ${e}`);
   } finally {
@@ -253,5 +271,6 @@ async function clearHistory() {
 
 setInterval(loadState, 5000);
 loadState();
+loadDiagnostics();
 </script>
 {% endblock %}
