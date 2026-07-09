@@ -308,7 +308,7 @@ def _monitor_loop():
                         attempts += 1
                         print(f"[monitor] {ip} — SSH reboot attempt {attempts}/{1 + REBOOT_RETRIES} (consec={_consec_fail[ip]})")
                         activity_log.log("monitor", f"Rebooting {_node_label(ip)} via SSH — attempt {attempts}/{1 + REBOOT_RETRIES}")
-                        _ssh(ip, "reboot")
+                        _ssh(ip, "sudo reboot")
                         with _lock:
                             _node_state[ip]["last_rebooted"] = _now_iso()
                         _reboot_attempts[ip] = attempts
@@ -445,7 +445,7 @@ def _failover_vip():
         return False, "Current master not detected"
     try:
         result = subprocess.run(
-            ["ssh", *_SSH_OPTS, f"{SSH_USER}@{master}", "systemctl restart keepalived"],
+            ["ssh", *_SSH_OPTS, f"{SSH_USER}@{master}", "sudo systemctl restart keepalived"],
             capture_output=True, text=True, timeout=15,
         )
         if result.returncode == 0:
@@ -524,7 +524,7 @@ def reboot(pihole_ip):
             is_master = (_vip_master == ip)
         if is_master and PIHOLE_VIP:
             print(f"[monitor] {ip} is VIP master — failing over before reboot")
-            _ssh_cmd(ip, "systemctl restart keepalived", timeout=10)
+            _ssh_cmd(ip, "sudo systemctl restart keepalived", timeout=10)
             for _ in range(5):
                 time.sleep(3)
                 _detect_vip_master()
@@ -536,7 +536,7 @@ def reboot(pihole_ip):
             else:
                 print(f"[monitor] VIP transfer uncertain — rebooting {ip} anyway")
         activity_log.log("monitor", f"Manual reboot triggered for {_node_label(ip)}")
-        _ssh(ip, "reboot")
+        _ssh(ip, "sudo reboot")
 
     threading.Thread(target=_safe_reboot, args=(pihole_ip,), daemon=True).start()
 
@@ -566,7 +566,7 @@ def run_diagnostics(ip: str) -> tuple:
     if ip == PIHOLE_VIP or ip not in PIHOLE_IPS:
         return False, "Invalid target"
     try:
-        r = _ssh_cmd(ip, "/etc/keepalived/collect-diag.sh manual", timeout=60)
+        r = _ssh_cmd(ip, "sudo /etc/keepalived/collect-diag.sh manual", timeout=60)
         output = (r.stdout + r.stderr).strip()
         if r.returncode != 0:
             return False, output[-150:] or f"exit {r.returncode}"
