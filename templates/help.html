@@ -37,6 +37,7 @@
   </p>
 
   <div class="toc">
+    <a href="#wizard">Getting Started wizard</a>
     <a href="#overview">Overview</a>
     <a href="#vlans">VLANs &amp; DHCP</a>
     <a href="#push">Push to Pi-hole</a>
@@ -60,6 +61,26 @@
     <a href="#log">Activity log</a>
     <a href="#health">Health</a>
     <a href="#troubleshooting">Troubleshooting</a>
+  </div>
+
+  <div class="section-title" id="wizard">Getting Started wizard</div>
+  <div class="card">
+    <h3>What it's for <a href="/wizard">Open →</a></h3>
+    <p>
+      A single guided page for first-run setup, instead of hand-editing a long list of environment
+      variables blind: required cluster basics (fleet nodes, Pi-hole admin password, SSH trust) followed
+      by every optional feature — VIP/failover, external DHCP source, notifications, NetBox import, admin
+      login — each showing whether it's already configured. It doesn't do anything the individual tabs
+      can't already do; it just puts every setting in one place with sensible current-state indicators.
+    </p>
+    <p>
+      <strong>Restart required, sometimes:</strong> nodes, SSH trust, DHCP failover enable, and admin
+      login all take effect immediately (they're stored in <code>/data</code>, not the environment). Pi-hole
+      admin password, SSH user, VIP, external DHCP/UniFi, the notification webhook, and NetBox
+      credentials are still plain environment variables read once at container start — saving one of
+      those shows a banner listing exactly which variables changed and need a container restart
+      (Dockge: stop then start the stack) to actually take effect.
+    </p>
   </div>
 
   <div class="section-title" id="overview">Overview</div>

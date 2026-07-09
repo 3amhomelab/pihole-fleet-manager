@@ -15,11 +15,10 @@ import os
 import secrets
 import threading
 
-from workers import activity_log
+from workers import activity_log, host_env
 
 STATE_FILE    = os.environ.get("AUTH_STATE_FILE", "/data/auth.json")
 SECRET_FILE   = os.environ.get("AUTH_SECRET_FILE", "/data/flask_secret")
-HOST_ENV_FILE = os.environ.get("HOST_ENV_FILE", "/config/host.env")
 
 _lock = threading.Lock()
 
@@ -58,29 +57,6 @@ def is_enabled() -> bool:
         return bool(_load().get("enabled"))
 
 
-def _write_password_to_host_env(password: str) -> None:
-    """Same in-place-write approach as setup.py's key write-back — the bind
-    mount's target inode can't be replaced via rename() from inside the
-    container, so this edits the file directly rather than write-tmp+rename."""
-    if not os.path.exists(HOST_ENV_FILE):
-        return
-    try:
-        with open(HOST_ENV_FILE) as f:
-            lines = f.readlines()
-        for i, line in enumerate(lines):
-            if line.startswith("ADMIN_PASSWORD="):
-                lines[i] = f"ADMIN_PASSWORD={password}\n"
-                break
-        else:
-            if lines and not lines[-1].endswith("\n"):
-                lines[-1] += "\n"
-            lines.append(f"ADMIN_PASSWORD={password}\n")
-        with open(HOST_ENV_FILE, "w") as f:
-            f.writelines(lines)
-    except Exception as e:
-        print(f"[auth] Could not write password back to host .env: {e}")
-
-
 def enable(password: str) -> tuple:
     if not password:
         return False, "Password required"
@@ -89,7 +65,7 @@ def enable(password: str) -> tuple:
         data["enabled"] = True
         data["password"] = password
         _save(data)
-    _write_password_to_host_env(password)
+    host_env.write_vars({"ADMIN_PASSWORD": password})
     activity_log.log("auth", "Admin login enabled")
     return True, None
 

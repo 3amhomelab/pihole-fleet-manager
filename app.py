@@ -13,7 +13,7 @@ from workers import (
     activity_log, auth, backup, dhcp_failover, external_dhcp, gravity,
     lease_conflicts, maintenance, monitor, netbox_import, nodes, notify,
     pihole_push, primary_dhcp, query_log, recovery, replication, setup,
-    stats, store, updater,
+    stats, store, updater, wizard,
 )
 
 PORT        = int(os.environ.get("PORT", "8080"))
@@ -91,6 +91,11 @@ def api_auth_disable():
 
 
 # --- Pages ---
+
+@app.route("/wizard")
+def page_wizard():
+    return render_template("wizard.html", active_page="wizard")
+
 
 @app.route("/")
 def page_vlans():
@@ -719,6 +724,27 @@ def api_setup_run():
     if not password:
         return jsonify({"ok": False, "error": "password required"}), 400
     setup.trigger_setup(password, regenerate)
+    return jsonify({"ok": True})
+
+
+# --- Getting Started wizard ---
+
+@app.route("/api/wizard/status")
+def api_wizard_status():
+    status = wizard.get_status()
+    status["nodes"] = nodes.get_ips()
+    status["ssh_key_exists"] = setup.key_exists()
+    status["failover_enabled"] = dhcp_failover.is_enabled()
+    status["auth_enabled"] = auth.is_enabled()
+    return jsonify(status)
+
+
+@app.route("/api/wizard/env", methods=["POST"])
+def api_wizard_save_env():
+    data = request.get_json(silent=True) or {}
+    ok, error = wizard.save_env(data)
+    if not ok:
+        return jsonify({"ok": False, "error": error}), 400
     return jsonify({"ok": True})
 
 

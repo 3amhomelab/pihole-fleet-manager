@@ -14,11 +14,10 @@ import subprocess
 import threading
 from datetime import datetime
 
-from workers import activity_log, nodes
+from workers import activity_log, host_env, nodes
 
 SSH_USER    = os.environ.get("PIHOLE_SSH_USER", "root")
 KEY_PATH    = os.environ.get("PIHOLE_SSH_KEY", "/data/ssh/pihole_key")
-HOST_ENV_FILE = os.environ.get("HOST_ENV_FILE", "/config/host.env")
 
 _SSH_OPTS = ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=15"]
 
@@ -95,28 +94,8 @@ def _write_key_to_host_env(key_b64: str) -> None:
     docker-compose.yml's ./.env:/config/host.env), update PIHOLE_SSH_KEY_B64
     there directly right when Setup succeeds — instant, and works for any
     stack this compose file happens to be running as, not just one deploy.sh
-    knows about. Silently no-ops if the mount isn't present.
-
-    Writes in place rather than the usual write-tmp-then-rename pattern —
-    a single-file bind mount's target inode can't be replaced via rename()
-    from inside the container (EBUSY), only written to directly."""
-    if not os.path.exists(HOST_ENV_FILE):
-        return
-    try:
-        with open(HOST_ENV_FILE) as f:
-            lines = f.readlines()
-        for i, line in enumerate(lines):
-            if line.startswith("PIHOLE_SSH_KEY_B64="):
-                lines[i] = f"PIHOLE_SSH_KEY_B64={key_b64}\n"
-                break
-        else:
-            if lines and not lines[-1].endswith("\n"):
-                lines[-1] += "\n"
-            lines.append(f"PIHOLE_SSH_KEY_B64={key_b64}\n")
-        with open(HOST_ENV_FILE, "w") as f:
-            f.writelines(lines)
-    except Exception as e:
-        print(f"[setup] Could not write key back to host .env: {e}")
+    knows about. Silently no-ops if the mount isn't present."""
+    host_env.write_vars({"PIHOLE_SSH_KEY_B64": key_b64})
 
 
 def _distribute_key(ip: str, password: str, pubkey: str) -> tuple:

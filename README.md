@@ -6,6 +6,14 @@ replication across nodes, scheduled software updates, and activity logging.
 
 ## Features
 
+- **Getting Started wizard** (`/wizard`) — one guided page covering the whole
+  first-run setup: required cluster basics (nodes, Pi-hole admin password,
+  SSH trust) followed by every optional feature (VIP/failover, external
+  DHCP, notifications, NetBox, admin login), each showing its current status
+  so you're not hand-editing `.env` blind. Settings that are still plain env
+  vars (most of the optional ones) show a "restart required" banner after
+  saving; anything already dynamic (nodes, SSH trust, failover enable, admin
+  login) applies immediately.
 - **VLAN DHCP scopes** — Pi-hole natively serves one DHCP scope; this adds
   any number of additional scopes (subnet, range, gateway, lease time,
   static host reservations), rendered as a `dnsmasq.d` config snippet and

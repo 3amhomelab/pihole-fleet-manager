@@ -71,6 +71,15 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
   </div>
 
   <div class="nav-section">
+    <a href="/wizard" class="nav-item {{ 'active' if active_page == 'wizard' else '' }}">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 1.5 2 4v4.5c0 3.6 2.6 6 6 6.5 3.4-.5 6-2.9 6-6.5V4L8 1.5z"/><path d="M5.8 8l1.6 1.6L10.5 6.3"/>
+      </svg>
+      Getting Started
+    </a>
+  </div>
+
+  <div class="nav-section">
     <span class="nav-label">DHCP</span>
     <a href="/" class="nav-item {{ 'active' if active_page == 'vlans' else '' }}">
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
