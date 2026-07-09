@@ -49,7 +49,7 @@
 <div class="toolbar">
   <h1>Health</h1>
   <div class="toolbar-actions">
-    <button class="btn" onclick="triggerFailover()">Manual VIP failover</button>
+    <button class="btn" id="failover-btn" onclick="triggerFailover()">Manual VIP failover</button>
     <button class="btn danger" onclick="clearHistory()">Clear history</button>
   </div>
 </div>
@@ -62,13 +62,15 @@
     unhealthy. If retries are exhausted the node is left down and flagged for manual intervention.
   </p>
 
-  <div class="section-title">VIP master</div>
-  <div class="vip-card">
-    <div>
-      <div class="vip-label">Currently holds the VIP</div>
-      <div class="vip-node" id="vip-master">—</div>
+  <div id="vip-section">
+    <div class="section-title">VIP master</div>
+    <div class="vip-card">
+      <div>
+        <div class="vip-label">Currently holds the VIP</div>
+        <div class="vip-node" id="vip-master">—</div>
+      </div>
+      <div class="hint" id="vip-addr"></div>
     </div>
-    <div class="hint" id="vip-addr"></div>
   </div>
 
   <div class="section-title">Nodes</div>
@@ -80,8 +82,10 @@
     <div class="log-body" id="failure-log">Loading…</div>
   </div>
 
-  <div class="section-title">VIP master history</div>
-  <div class="history-list" id="history-list"></div>
+  <div id="vip-history-section">
+    <div class="section-title">VIP master history</div>
+    <div class="history-list" id="history-list"></div>
+  </div>
 </div>
 {% endblock %}
 
@@ -101,8 +105,15 @@ async function loadState() {
 }
 
 function render(d) {
-  document.getElementById('vip-master').textContent = d.vip_master || '(undetected)';
-  document.getElementById('vip-addr').textContent = d.vip ? `VIP: ${d.vip}` : 'PIHOLE_VIP not configured';
+  const vipConfigured = !!d.vip;
+  document.getElementById('vip-section').style.display = vipConfigured ? '' : 'none';
+  document.getElementById('vip-history-section').style.display = vipConfigured ? '' : 'none';
+  document.getElementById('failover-btn').style.display = vipConfigured ? '' : 'none';
+
+  if (vipConfigured) {
+    document.getElementById('vip-master').textContent = d.vip_master || '(undetected)';
+    document.getElementById('vip-addr').textContent = `VIP: ${d.vip}`;
+  }
 
   const piholes = d.piholes || {};
   const ips = Object.keys(piholes);
