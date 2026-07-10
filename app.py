@@ -21,6 +21,11 @@ APP_VERSION = os.environ.get("APP_VERSION", "dev")
 
 app = Flask(__name__)
 app.secret_key = auth.get_secret_key()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "false").strip().lower() in ("1", "true", "yes"),
+)
 
 # Routes reachable with no session even when admin login is enabled: the
 # login page/action itself, and /api/known-hosts, which other apps on the
@@ -31,15 +36,21 @@ _AUTH_EXEMPT = {"/login", "/api/known-hosts"}
 
 @app.before_request
 def _require_login():
-    if not auth.is_enabled():
-        return None
     if request.path in _AUTH_EXEMPT or request.path.startswith("/static/"):
         return None
-    if session.get("authenticated"):
-        return None
-    if request.path.startswith("/api/"):
-        return jsonify({"ok": False, "error": "Login required"}), 401
-    return redirect("/login")
+    if auth.is_active():
+        if session.get("authenticated"):
+            return None
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "error": "Login required"}), 401
+        return redirect("/login")
+    # Enabled by default on a fresh install, but no password set yet — not
+    # locking anyone out (see auth.is_active()), just steering every page
+    # toward the wizard's Admin Login step until one is configured.
+    if auth.is_enabled() and not auth.has_password() and request.path != "/wizard" \
+            and not request.path.startswith("/api/"):
+        return redirect("/wizard")
+    return None
 
 
 @app.context_processor
@@ -69,7 +80,11 @@ def logout():
 
 @app.route("/api/auth/status")
 def api_auth_status():
-    return jsonify({"enabled": auth.is_enabled(), "authenticated": bool(session.get("authenticated"))})
+    return jsonify({
+        "enabled": auth.is_enabled(),
+        "password_set": auth.has_password(),
+        "authenticated": bool(session.get("authenticated")),
+    })
 
 
 @app.route("/api/auth/enable", methods=["POST"])
@@ -742,6 +757,7 @@ def api_wizard_status():
     status["ssh_key_exists"] = setup.key_exists()
     status["failover_enabled"] = dhcp_failover.is_enabled()
     status["auth_enabled"] = auth.is_enabled()
+    status["auth_password_set"] = auth.has_password()
     return jsonify(status)
 
 

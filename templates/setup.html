@@ -66,10 +66,10 @@
   <div class="section-title">Admin Login</div>
   <div class="card">
     <p class="hint" style="margin-bottom:16px">
-      Off by default — anyone who can reach this app's URL can use it with no login at all. Turning
-      this on requires a password for every page and API call (session-based, so you only log in once
-      per browser). The password is saved back into this stack's own <code>.env</code> (<code>ADMIN_PASSWORD</code>),
-      same as the SSH key above — not just the <code>/data</code> volume.
+      Enabled by default on a fresh install, but inert until a password is set below — sets both
+      together, in one step. Once active, every page and API call requires the password
+      (session-based, so you only log in once per browser). The password is stored as a salted
+      hash in the <code>/data</code> volume, not saved anywhere in plaintext.
     </p>
     <div id="auth-status"></div>
     <div id="auth-enable-form" style="display:none;margin-top:14px">
@@ -365,9 +365,12 @@ async function loadAuthStatus() {
   const d = await r.json();
   const statusEl = document.getElementById('auth-status');
   const formEl = document.getElementById('auth-enable-form');
-  if (d.enabled) {
+  if (d.enabled && d.password_set) {
     statusEl.innerHTML = `<span class="node-badge ok">Admin login is ON</span> <button class="preview-btn" style="margin-left:10px" onclick="disableAuth()">Disable</button>`;
     formEl.style.display = 'none';
+  } else if (d.enabled) {
+    statusEl.innerHTML = `<span class="node-badge fail">Admin login is ON but no password is set yet — set one below to activate it</span>`;
+    formEl.style.display = '';
   } else {
     statusEl.innerHTML = `<span class="node-badge fail">Admin login is OFF</span>`;
     formEl.style.display = '';

@@ -186,11 +186,11 @@
     <button class="btn-primary" onclick="saveNetbox()">Save</button>
   </div>
 
-  <div class="section-title"><span class="step-num">7</span> Admin Login <span class="hint">(optional)</span></div>
+  <div class="section-title"><span class="step-num">7</span> Admin Login</div>
   <div class="card">
     <p class="hint" style="margin-bottom:14px">
-      Off by default — every page and API call is open to anyone who can reach this app. Turning this on
-      requires a password afterward (session-based, no restart needed).
+      Enabled by default, but inert until you set a password here — do that now so the app isn't left
+      open to anyone who can reach it (session-based afterward, no restart needed).
     </p>
     <div id="wiz-auth-status" style="margin-bottom:14px"></div>
     <div id="wiz-auth-enable-form">
@@ -275,9 +275,12 @@ function render() {
   // Admin login
   const authEl = document.getElementById('wiz-auth-status');
   const authForm = document.getElementById('wiz-auth-enable-form');
-  if (wizStatus.auth_enabled) {
+  if (wizStatus.auth_enabled && wizStatus.auth_password_set) {
     authEl.innerHTML = `<span class="node-badge ok">Admin login is ON</span> <button class="preview-btn" style="margin-left:10px" onclick="disableWizAuth()">Disable</button>`;
     authForm.style.display = 'none';
+  } else if (wizStatus.auth_enabled) {
+    authEl.innerHTML = `<span class="node-badge fail">Admin login is ON but no password is set yet — set one below to activate it</span>`;
+    authForm.style.display = '';
   } else {
     authEl.innerHTML = `<span class="node-badge fail">Admin login is OFF</span>`;
     authForm.style.display = '';

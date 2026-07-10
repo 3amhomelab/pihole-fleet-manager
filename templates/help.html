@@ -440,19 +440,20 @@
       healthy peer onto it.</p>
   </div>
 
-  <div class="section-title" id="auth">Admin login <span class="badge default-off">off by default</span></div>
+  <div class="section-title" id="auth">Admin login <span class="badge default-on">on by default</span></div>
   <div class="card">
     <h3>What it's for <a href="/setup">Open → (top of Setup page)</a></h3>
     <p>
-      By default, every page and API endpoint is open to anyone who can reach this app — fine behind a
-      trusted LAN, not fine if that changes. Flip the switch on the Setup page, set a password once, and
-      every page/API call requires it afterward (session-based — log in once per browser, not per
-      request).
+      Enabled by default on a fresh install — but inert until a password is actually set, so first boot
+      never traps you behind a login you can't satisfy. Set a password once on the Setup page (or the
+      wizard's Admin Login step) and every page/API call requires it afterward (session-based — log in
+      once per browser, not per request). Until a password is set, every page redirects to the Getting
+      Started wizard so it doesn't get missed. Existing installs that had already turned this off keep
+      that choice.
     </p>
     <p>
-      The password is written back into this stack's own <code>.env</code>
-      (<code>ADMIN_PASSWORD</code>), the same write-back technique the SSH key uses, so it survives a
-      container recreate and isn't only sitting in the <code>/data</code> volume.
+      The password itself is stored as a salted hash in the <code>/data</code> volume — never written to
+      <code>.env</code> or logged anywhere in plaintext, since it's only ever compared, never replayed.
       <code>/api/known-hosts</code> stays reachable without a session either way — other apps (e.g.
       Network-Health) poll it directly for Pi-hole DHCP awareness, and gating it would silently break
       that integration.
@@ -593,9 +594,12 @@
         or failed its post-upgrade health check. Fix the affected node, confirm it's healthy on the
         <a href="#health" style="color:var(--blue)">Health</a> page, then click <strong>Resume
         rotation</strong> on the Updater page.</li>
-      <li><strong>Locked out after enabling Admin login</strong> — the password is written to this stack's
-        <code>.env</code> as <code>ADMIN_PASSWORD</code>; set it back to blank there and restart the
-        container to disable login entirely without needing to authenticate first.</li>
+      <li><strong>Locked out after enabling Admin login</strong> — the password is only stored as a hash
+        in <code>/data/auth.json</code>, not in <code>.env</code>, so there's nothing to blank out there.
+        Instead: <code>docker exec -it fleet-manager rm /data/auth.json</code>, then restart the
+        container — this resets login to its fresh-install state (enabled, no password set, gate
+        inactive) without needing to authenticate first. Set a new password from the Setup page or
+        wizard afterward.</li>
       <li><strong>NetBox scan finds nothing / a VLAN has 0 hosts</strong> — the VLAN needs an associated
         Prefix in NetBox's IPAM, and hosts need an IP Address assigned to a device/VM interface that has a
         MAC address set (not just an IP with no assignment). Check <code>NETBOX_URL</code>/
