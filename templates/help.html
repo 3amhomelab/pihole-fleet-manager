@@ -1,0 +1,610 @@
+{% extends "base.html" %}
+{% block title %}Help — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px;max-width:900px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:32px; }
+.section-title:first-child { margin-top:0; }
+.hint { font-size:12px;color:var(--muted); }
+
+.card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:16px; }
+.card h3 { font-size:14px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:8px; }
+.card h3 a { color:var(--blue);text-decoration:none;font-size:11px;font-weight:600;margin-left:auto; }
+.card p { font-size:13px;line-height:1.65;color:var(--text);margin-bottom:8px; }
+.card p:last-child { margin-bottom:0; }
+.card ul { margin:6px 0 8px 18px;font-size:13px;line-height:1.65; }
+.card code { background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-family:var(--mono);font-size:12px; }
+.badge { display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:999px;margin-left:8px; }
+.badge.default-on  { background:var(--green-bg);color:var(--green); }
+.badge.default-off  { background:rgba(245,158,11,.12);color:var(--yellow); }
+.badge.needs-vip { background:var(--red-bg);color:var(--red); }
+
+.toc { display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px;margin-bottom:8px; }
+.toc a { font-size:12.5px;color:var(--blue);text-decoration:none;padding:6px 10px;border-radius:6px;background:var(--surface);border:1px solid var(--border); }
+.toc a:hover { background:rgba(59,130,246,.1); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar"><h1>Help</h1></div>
+
+<div class="container">
+  <p class="hint" style="margin-bottom:16px">
+    What this app does, how its pieces fit together, and what to check first if something isn't working.
+  </p>
+
+  <div class="toc">
+    <a href="#wizard">Getting Started wizard</a>
+    <a href="#overview">Overview</a>
+    <a href="#vlans">VLANs &amp; DHCP</a>
+    <a href="#push">Push to Pi-hole</a>
+    <a href="#groups">Group assignment</a>
+    <a href="#hostnames">Hostname resolution</a>
+    <a href="#replication">Replication</a>
+    <a href="#drift">Drift check</a>
+    <a href="#failover">Failover</a>
+    <a href="#stats">Stats</a>
+    <a href="#updater">Updater</a>
+    <a href="#gravity">Gravity updates</a>
+    <a href="#recovery">Recovery</a>
+    <a href="#lease-conflicts">Lease conflicts</a>
+    <a href="#external-dhcp">External DHCP sync</a>
+    <a href="#backup">Backup &amp; rollback</a>
+    <a href="#netbox">NetBox import</a>
+    <a href="#notify">Notifications</a>
+    <a href="#nodes">Fleet nodes</a>
+    <a href="#auth">Admin login</a>
+    <a href="#setup">Setup (SSH)</a>
+    <a href="#log">Activity log</a>
+    <a href="#health">Health</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+  </div>
+
+  <div class="section-title" id="wizard">Getting Started wizard</div>
+  <div class="card">
+    <h3>What it's for <a href="/wizard">Open →</a></h3>
+    <p>
+      A single guided page for first-run setup, instead of hand-editing a long list of environment
+      variables blind: required cluster basics (fleet nodes, Pi-hole admin password, SSH trust) followed
+      by every optional feature — VIP/failover, external DHCP source, notifications, NetBox import, admin
+      login — each showing whether it's already configured. It doesn't do anything the individual tabs
+      can't already do; it just puts every setting in one place with sensible current-state indicators.
+    </p>
+    <p>
+      <strong>Restart required, sometimes:</strong> nodes, SSH trust, DHCP failover enable, and admin
+      login all take effect immediately (they're stored in <code>/data</code>, not the environment). Pi-hole
+      admin password, SSH user, VIP, external DHCP/UniFi, the notification webhook, and NetBox
+      credentials are still plain environment variables read once at container start — saving one of
+      those shows a banner listing exactly which variables changed and need a container restart
+      (Dockge: stop then start the stack) to actually take effect.
+    </p>
+  </div>
+
+  <div class="section-title" id="overview">Overview</div>
+  <div class="card">
+    <p>
+      Pihole Fleet Manager is a sidecar app for a multi-node Pi-hole v6 cluster. Pi-hole itself has no
+      concept of "the other nodes" — every Pi-hole instance is independent, so this app is what makes a
+      group of them behave like one fleet: one place to define extra DHCP scopes, one place to keep
+      settings in sync, one place to see what changed and when.
+    </p>
+    <p>
+      Everything here talks directly to each node's own IP address — seeded once from
+      <code>PIHOLE_IPS</code>, managed afterward from the <a href="#nodes" style="color:var(--blue)">Fleet
+      Nodes</a> section — and, for anything that needs to write files, over SSH. Nothing requires a load
+      balancer or virtual IP in front of the cluster — the one exception is the <strong>Failover</strong>
+      tab, which is entirely optional. See that section below.
+    </p>
+    <p>
+      Everything is open by default (no login) and inert unless configured for anything opt-in — see
+      <a href="#auth" style="color:var(--blue)">Admin login</a>, <a href="#notify" style="color:var(--blue)">Notifications</a>,
+      and <a href="#netbox" style="color:var(--blue)">NetBox import</a> if you want those.
+    </p>
+  </div>
+
+  <div class="section-title" id="vlans">VLANs &amp; DHCP scopes</div>
+  <div class="card">
+    <h3>What it's for <a href="/">Open →</a></h3>
+    <p>
+      Pi-hole's own Settings page only lets you configure <em>one</em> DHCP scope. This tab lets you
+      define any number of additional scopes ("VLANs") — each with its own subnet, gateway, IP range,
+      lease time, and static host reservations — and pushes them out to every node as a
+      <code>dnsmasq.d</code> config snippet, alongside Pi-hole's native scope.
+    </p>
+    <p><strong>The "Primary" VLAN</strong> at the top of the list isn't something you create — it's a
+      read-only mirror of whatever DHCP scope is already configured natively in Pi-hole's own Settings.
+      Its hosts are the actual reservations from Pi-hole's API, always live, not stored locally.</p>
+    <p><strong>Adding hosts:</strong> expand a VLAN and use the form at the bottom to reserve a MAC → IP
+      (with an optional hostname). Any device that already has an active lease in that VLAN's subnet
+      shows up automatically, tagged <strong>DYNAMIC</strong> — click its IP or MAC to turn it into a
+      permanent static reservation.</p>
+    <p><strong>Conditional Forward Domain</strong> (optional, per VLAN): Pi-hole's own Settings UI only
+      supports one conditional-forwarding domain/subnet fleet-wide. Setting this per VLAN lets devices in
+      that VLAN resolve local domain names (e.g. reverse DNS for a router's own admin hostname) without
+      touching Pi-hole's native single setting.</p>
+    <p><strong>Pi-hole Group</strong> (optional, per VLAN): see <a href="#groups" style="color:var(--blue)">Group assignment</a> below.</p>
+  </div>
+
+  <div class="section-title" id="push">Push to Pi-hole</div>
+  <div class="card">
+    <p>Nothing you do on the VLANs tab takes effect on the actual Pi-hole nodes until you click
+      <strong>Push scopes to all Pi-holes</strong>. A push does all of the following, per node, in order:</p>
+    <ul>
+      <li><strong>Validates</strong> the full VLAN set first — if any two VLANs overlap, or a host/range
+        falls outside its own subnet, the entire push is blocked before anything is written anywhere.</li>
+      <li>Writes the rendered <code>dnsmasq.d</code> file over SSH.</li>
+      <li>Flips Pi-hole's <code>misc.etc_dnsmasq_d</code> setting on so the file actually gets read.</li>
+      <li>Reloads DNS (<code>pihole restartdns</code>) so the new scopes take effect immediately.</li>
+      <li>Syncs VLAN-derived hostname DNS records — see <a href="#hostnames" style="color:var(--blue)">Hostname resolution</a>.</li>
+      <li>Assigns each VLAN's clients to its configured Pi-hole group, if one is set — see
+        <a href="#groups" style="color:var(--blue)">Group assignment</a>.</li>
+    </ul>
+    <p>Use <strong>Preview generated config</strong> to see exactly what will be written, without pushing
+      anything. If a node already has scopes from a different/older instance pointed at the same
+      cluster, the <strong>Import</strong> flow (on the same page) can pull those back into the local
+      store instead of you re-entering them by hand.</p>
+  </div>
+
+  <div class="section-title" id="groups">Per-VLAN group assignment</div>
+  <div class="card">
+    <p>
+      Pi-hole supports assigning different blocklist policies ("groups") to different clients — but only
+      per individual client (by MAC/IP), never per subnet/VLAN. Setting a <strong>Pi-hole Group</strong>
+      name on a VLAN (on the VLANs tab) closes that gap: every push assigns every client currently in
+      that VLAN — static reservations and active dynamic leases alike — to the named group, via Pi-hole's
+      <code>/api/clients</code>.
+    </p>
+    <p>
+      The group itself has to already exist on a node for this to take effect there — if it doesn't yet,
+      the push logs a warning for that node (rather than failing the whole push) telling you the group
+      name wasn't found. Create the group once on any node's own Pi-hole UI (Group Management), or let
+      <a href="#replication" style="color:var(--blue)">replication's group reconciliation</a> propagate it
+      to the rest of the fleet automatically.
+    </p>
+  </div>
+
+  <div class="section-title" id="hostnames">Fleet-wide hostname resolution</div>
+  <div class="card">
+    <p>
+      Each of the 3 Pi-hole nodes only knows the hostnames of clients <em>it personally</em> handed a
+      DHCP lease to — its DNS resolver has no visibility into what another node's DHCP server is doing.
+      In practice this means a device's hostname can fail to resolve depending on which node happens to
+      answer a given DNS query.
+    </p>
+    <p>
+      Every push fixes this for VLAN static reservations: it publishes an <code>ip hostname</code> DNS
+      record on every node for each VLAN host that has a hostname set. Only entries whose IP falls inside
+      one of your VLANs' subnets are ever touched — anything else already configured under Pi-hole's own
+      Local DNS Records (custom entries, go-links, etc.) is left completely alone.
+    </p>
+  </div>
+
+  <div class="section-title" id="replication">Replication</div>
+  <div class="card">
+    <h3>What it's for <a href="/replication">Open →</a></h3>
+    <p>
+      Compares Pi-hole settings across every node and, for anything that differs, keeps whichever value
+      changed most recently and pushes it to the rest — using a local change-detection ledger, since
+      Pi-hole's API doesn't expose per-field modification times.
+    </p>
+    <p><strong>Toggles</strong> at the bottom of the page let you choose exactly which settings groups
+      participate (DHCP scope, static reservations, DNS upstreams, local DNS records, conditional
+      forwarding, blocking state, etc.) — anything toggled off is left alone on every node, even if it
+      differs. <span class="badge default-on">On by default</span> for most groups;
+      <span class="badge default-off">off by default</span> for <strong>Blocking state</strong> (so you
+      can pause blocking on one node for testing without it silently flipping everywhere) and
+      <strong>Groups &amp; client assignments</strong> (a bigger, more invasive change — see below).</p>
+    <p><strong>Groups &amp; client assignments</strong> reconciles Pi-hole's group definitions and every
+      client's group membership fleet-wide. This is matched by <em>name</em> (for groups) and by client
+      identifier (for clients) rather than by Pi-hole's internal numeric id — group ids are assigned
+      locally per node, so the same group can end up with a completely different id on each one if
+      created independently. Enabling this will auto-create a missing group on other nodes, which is why
+      it defaults off.</p>
+    <p><strong>Adlists &amp; domain allow/deny overrides</strong> (Blocklists category, both
+      <span class="badge default-off">off by default</span>) extend the same name/address-matched
+      reconciliation to gravity.db: adlist URLs (matched by address) and individual exact/regex domain
+      overrides (matched by type+kind+domain). This is what actually keeps <em>"is this domain
+      blocked"</em> consistent fleet-wide — the config.toml settings above never touch gravity.db at all,
+      so without this, a domain whitelisted on one node stays blocked on the others. Enabling either
+      triggers a gravity update on any node it changes, same reasoning as
+      <a href="#gravity" style="color:var(--blue)">staggered gravity updates</a>.</p>
+    <p><strong>Auto-replication</strong>: set an interval (minutes) to run this on a schedule instead of
+      only on manual click.</p>
+    <p>
+      A snapshot of every enabled setting is taken automatically right before each run applies anything —
+      see <a href="#backup" style="color:var(--blue)">Backup &amp; rollback</a> if a bad merge needs
+      undoing.
+    </p>
+  </div>
+
+  <div class="section-title" id="drift">Drift check</div>
+  <div class="card">
+    <p>
+      A separate, <strong>read-only</strong> button on the Replication page. Unlike a normal replication
+      run (which actively merges and pushes changes), this only reads every node's current state and
+      reports any setting that disagrees between nodes — nothing is changed. Use it to sanity-check that
+      nodes are actually in sync, independent of what the last merge run reported.
+    </p>
+    <p>
+      Separately, every replication push is read back from the node it was just applied to, to confirm
+      the value actually landed — rather than just trusting the API's success response. If a push
+      "succeeds" by HTTP status but doesn't verify on read-back, that's logged as a distinct failure.
+    </p>
+  </div>
+
+  <div class="section-title" id="failover">Failover <span class="badge needs-vip">needs PIHOLE_VIP</span></div>
+  <div class="card">
+    <h3>What it's for <a href="/failover">Open →</a></h3>
+    <p>
+      DHCP is broadcast-based — a client's discovery request has no destination IP to filter on — so if
+      your cluster sits behind a keepalived virtual IP (VIP) for DNS, that VIP does <em>nothing</em> to
+      stop every node's embedded DHCP server from independently answering every request. Left alone, all
+      3 nodes will happily hand out conflicting leases from the same pool at once.
+    </p>
+    <p>
+      This tab polls (over SSH) for which physical node currently holds the VIP, then uses Pi-hole's API
+      to keep DHCP active <em>only</em> on that node — and re-checks continuously, so a node that gets
+      manually re-enabled (or missed a previous check) is corrected automatically on the next pass.
+    </p>
+    <p>
+      Requires <code>PIHOLE_VIP</code> to be set in the environment (e.g. <code>192.168.1.100</code>) —
+      without it, the toggle can still be flipped on but does nothing, and the page shows a warning
+      banner saying so. If your cluster has no VIP at all, just leave this disabled; every other feature
+      in the app works the same either way.
+    </p>
+  </div>
+
+  <div class="section-title" id="stats">Stats</div>
+  <div class="card">
+    <h3>What it's for <a href="/stats">Open →</a></h3>
+    <p>
+      Pi-hole's own dashboard only ever shows one node — this merges query totals (total, blocked,
+      forwarded, cached, % blocked) and top-domain/top-client lists across every reachable node into one
+      view, plus a per-node breakdown.
+    </p>
+    <p>
+      The top-domains/top-clients lists are summed from each node's own top-10 list, not an exhaustive
+      per-domain count across the whole fleet (Pi-hole's API has no cheap way to compute that) — good for
+      "what's dominating right now," not a precise source of truth for long-tail analysis.
+    </p>
+    <p>
+      <strong>Search query log across the fleet</strong> (further down the page) fans a domain and/or
+      client-IP search out to every node's own query log and merges the results, tagged with which node
+      answered — Pi-hole's own dashboard only ever shows one node's log, so this is the fastest way to
+      answer "was this domain blocked, and where."
+    </p>
+  </div>
+
+  <div class="section-title" id="updater">Updater</div>
+  <div class="card">
+    <h3>What it's for <a href="/updater">Open →</a></h3>
+    <p>
+      Checks each node's Pi-hole software version and can upgrade it (<code>pihole -up</code>, then
+      reboots). One node is auto-upgraded per day on a rotating schedule (so the whole fleet is never
+      mid-upgrade at once), and you can trigger any individual node manually at any time. Upgrade history
+      (upgraded / already up to date / failed) is kept per node. A snapshot is taken automatically before
+      every upgrade attempt — see <a href="#backup" style="color:var(--blue)">Backup &amp; rollback</a>.
+    </p>
+    <p>
+      <strong>Post-upgrade health gate:</strong> a <code>pihole -up</code> that exits clean isn't proof the
+      node actually still works — after the reboot, this runs the same ping→DNS→API health check the
+      monitor itself uses (waiting <code>UPDATER_POST_UPGRADE_WAIT_SECS</code> first). If that check fails,
+      the result is recorded as <strong>upgrade_health_failed</strong> and the daily round-robin
+      <strong>halts</strong> — it will not advance to the next node the following day — until you click
+      <strong>Resume rotation</strong> on this page. A hard upgrade failure (retries exhausted) halts the
+      same way. This is what stops a bad Pi-hole release from silently rolling across the whole fleet, one
+      node per day.
+    </p>
+  </div>
+
+  <div class="section-title" id="gravity">Staggered gravity updates</div>
+  <div class="card">
+    <h3>What it's for <a href="/updater">Open → (same page as Updater)</a></h3>
+    <p>
+      A separate rotation from the software updater, on the same Updater page: one node updates its
+      blocklists (<code>pihole -g</code> / gravity) per day, at an hour offset from
+      <code>PIHOLE_UPDATER_HOUR</code> so the two schedules never collide.
+    </p>
+    <p>
+      A blocklist URL that's briefly unreachable can be silently skipped or served from cache rather than
+      erroring — Pi-hole gives no reliable success signal beyond "the command exited 0." After every
+      update, this compares the node's total blocklist domain count (summed across all enabled block
+      lists) against its own count before the update; a drop larger than
+      <code>GRAVITY_DROP_THRESHOLD_PERCENT</code> (default 10%) is logged as a probable partial-update
+      failure instead of silently accepted as a smaller-but-successful blocklist. A snapshot is taken
+      automatically before every gravity update — see
+      <a href="#backup" style="color:var(--blue)">Backup &amp; rollback</a>.
+    </p>
+  </div>
+
+  <div class="section-title" id="recovery">Recovery</div>
+  <div class="card">
+    <h3>What it's for <a href="/recovery">Open →</a></h3>
+    <p>
+      Pi-hole's own Teleporter backup is config-only — it doesn't contain the real gravity/query
+      databases, so it's a poor way to actually rebuild a node. This tab instead clones a
+      <strong>healthy, currently-running</strong> node directly onto a target: settings, DHCP static
+      reservations, groups and client group assignments, adlists and domain allow/deny overrides, and
+      every VLAN's dnsmasq.d scope — then triggers a gravity update on the target so its blocklists
+      populate correctly (against the <em>cloned</em> adlists, not whatever the target happened to have
+      before).
+    </p>
+    <p>
+      This is a deliberate <strong>one-way overwrite</strong>, not a merge — unlike Replication (which
+      compares nodes and keeps whichever changed most recently), Recovery assumes the target has nothing
+      worth preserving. Use it after reprovisioning a wiped or replaced node, never against a node that's
+      still holding its own live, wanted state.
+    </p>
+  </div>
+
+  <div class="section-title" id="lease-conflicts">Stale lease conflicts</div>
+  <div class="card">
+    <h3>What it's for <a href="/">Open → (bottom of VLANs page)</a></h3>
+    <p>
+      A known Pi-hole footgun: giving a client a static DHCP reservation doesn't retroactively evict a
+      dynamic lease it already holds — the lease database can keep answering with the old IP until it's
+      manually cleared (or FTL restarted). This checks every node's active leases against every static
+      reservation (the primary scope and every VLAN) and flags any MAC whose current active lease doesn't
+      match its reservation.
+    </p>
+    <p>
+      Each flagged conflict can be cleared directly from the same page — it deletes the stale lease via
+      Pi-hole's API so the client picks up its correct reserved IP on its next renewal.
+    </p>
+  </div>
+
+  <div class="section-title" id="external-dhcp">External DHCP-source sync <span class="badge default-off">opt-in, UniFi only</span></div>
+  <div class="card">
+    <h3>What it's for <a href="/setup">Open → (bottom of Setup page)</a></h3>
+    <p>
+      For a different topology than this app otherwise assumes: Pi-hole handling DNS only, with DHCP
+      actually served by a separate platform (UniFi, pfSense, OPNsense). In that setup Pi-hole never sees
+      a DHCP lease, so every client shows up as "Unknown" — this closes that gap by pulling the client
+      name/MAC/IP list from the external platform and publishing it as local DNS records on every node,
+      the same mechanism the VLAN hostname sync uses.
+    </p>
+    <p>
+      Entirely inert unless <code>EXTERNAL_DHCP_SOURCE</code> is set. Only a UniFi OS (UDM-family)
+      controller is currently implemented, and it has <strong>not</strong> been exercised against real
+      UniFi hardware — treat it as best-effort until verified. pfSense/OPNsense support doesn't exist yet.
+    </p>
+  </div>
+
+  <div class="section-title" id="backup">Backup &amp; rollback</div>
+  <div class="card">
+    <h3>What it's for <a href="/backup">Open →</a></h3>
+    <p>
+      Multi-master replication faithfully propagates mistakes too — a bad setting changed on one node wins
+      the recency contest and lands on every node, and <a href="#recovery" style="color:var(--blue)">Recovery</a>
+      can't help because every "healthy peer" now has the same bad config. This tab snapshots every
+      node's replication-managed settings, static reservations, groups, client assignments, adlists, and
+      domain overrides to a file, so there's always something to roll back to.
+    </p>
+    <p><strong>When snapshots are taken:</strong> automatically right before every replication push,
+      gravity update, and software upgrade attempt; on-demand via <strong>Back up now</strong>; and
+      optionally on a <strong>daily/weekly/monthly</strong> schedule. Keeps the most recent snapshots
+      (1–5, your choice) — older ones are pruned automatically.</p>
+    <p><strong>Rolling back</strong> restores a chosen snapshot to one specific node or the whole fleet,
+      then triggers a gravity update on whatever it touched. This is a one-way overwrite, same as
+      Recovery — not a merge.</p>
+  </div>
+
+  <div class="section-title" id="netbox">NetBox import <span class="badge default-off">opt-in</span></div>
+  <div class="card">
+    <h3>What it's for <a href="/setup">Open → (Setup page)</a></h3>
+    <p>
+      Reads VLANs from NetBox's IPAM and, for each one's associated Prefix, every IP Address in that
+      prefix that's assigned to a device or VM interface with a MAC address — as candidate static host
+      reservations (hostname from the IP's DNS name, falling back to the device/VM name).
+    </p>
+    <p>
+      Gateway and the DHCP-issuable range aren't modeled in NetBox, so both are a best-effort guess (first
+      usable host as gateway) — review and edit on the <a href="#vlans" style="color:var(--blue)">VLANs</a>
+      page after import, don't trust them blindly. Entirely read-only against NetBox; requires
+      <code>NETBOX_URL</code> and <code>NETBOX_TOKEN</code> — inert otherwise.
+    </p>
+  </div>
+
+  <div class="section-title" id="notify">Notifications <span class="badge default-off">opt-in</span></div>
+  <div class="card">
+    <p>
+      A generic webhook (<code>NOTIFY_WEBHOOK_URL</code>) — no specific provider baked in, so it works
+      with Home Assistant's REST API, ntfy, a Telegram bridge, n8n, or anything else that accepts a
+      webhook. POSTs a small JSON payload (<code>event</code>, <code>message</code>, <code>severity</code>,
+      <code>source</code>) on:
+    </p>
+    <ul>
+      <li>A node still down after all SSH reboot retries are exhausted (or skipped for lack of quorum)</li>
+      <li>A gravity update flagged as a probable partial failure, or a hard gravity failure</li>
+      <li>An upgrade failure, or a failed post-upgrade health check</li>
+    </ul>
+    <p>Delivery is fire-and-forget in a background thread, so a slow/unreachable webhook endpoint never
+      blocks the action that triggered it. Inert unless the URL is set.</p>
+  </div>
+
+  <div class="section-title" id="nodes">Fleet nodes</div>
+  <div class="card">
+    <h3>What it's for <a href="/setup">Open → (top of Setup page)</a></h3>
+    <p>
+      The list of Pi-hole node IPs every feature in this app operates on. <code>PIHOLE_IPS</code> seeds
+      this list once on first boot; after that, this UI-managed list is authoritative, not the
+      environment variable. Add or remove a node here and every loop (health monitor, replication,
+      updater, gravity, failover) picks up the change immediately — no container recreate needed.
+    </p>
+    <p>Removing a node here only stops this app from managing/monitoring it — it doesn't touch the node
+      itself. Add a new node here first, then run <a href="#setup" style="color:var(--blue)">SSH trust
+      setup</a> and (optionally) <a href="#recovery" style="color:var(--blue)">Recovery</a> to clone a
+      healthy peer onto it.</p>
+  </div>
+
+  <div class="section-title" id="auth">Admin login <span class="badge default-off">off by default</span></div>
+  <div class="card">
+    <h3>What it's for <a href="/setup">Open → (top of Setup page)</a></h3>
+    <p>
+      By default, every page and API endpoint is open to anyone who can reach this app — fine behind a
+      trusted LAN, not fine if that changes. Flip the switch on the Setup page, set a password once, and
+      every page/API call requires it afterward (session-based — log in once per browser, not per
+      request).
+    </p>
+    <p>
+      The password is written back into this stack's own <code>.env</code>
+      (<code>ADMIN_PASSWORD</code>), the same write-back technique the SSH key uses, so it survives a
+      container recreate and isn't only sitting in the <code>/data</code> volume.
+      <code>/api/known-hosts</code> stays reachable without a session either way — other apps (e.g.
+      Network-Health) poll it directly for Pi-hole DHCP awareness, and gating it would silently break
+      that integration.
+    </p>
+  </div>
+
+  <div class="section-title" id="setup">Setup (SSH trust)</div>
+  <div class="card">
+    <h3>What it's for <a href="/setup">Open →</a></h3>
+    <p>
+      Everything that writes files to a node (VLAN pushes) needs SSH access. This tab bootstraps that:
+      generates an ed25519 keypair (or reuses an existing one) and distributes the public half to every
+      configured node using a one-time password, so day-to-day operation afterward needs no stored
+      password at all — just the key.
+    </p>
+    <p>
+      Run this once when first setting the app up, and again (with <strong>Regenerate</strong>) if you
+      ever need to rotate the key. Per-node status here also doubles as a connectivity/permissions check
+      — it verifies both SSH key auth and passwordless <code>sudo</code> for the configured SSH user.
+    </p>
+    <p>
+      This same page also has <a href="#nodes" style="color:var(--blue)">Fleet Nodes</a> (add/remove
+      nodes), <a href="#netbox" style="color:var(--blue)">NetBox import</a>, and
+      <a href="#auth" style="color:var(--blue)">Admin login</a>.
+    </p>
+  </div>
+
+  <div class="section-title" id="log">Activity log</div>
+  <div class="card">
+    <h3>What it's for <a href="/log">Open →</a></h3>
+    <p>
+      A unified, filterable history of everything the app has done across every feature — VLAN/host
+      edits, pushes (and any validation that blocked one), replication runs (including health warnings and
+      verification failures), upgrades, and DHCP failovers. This is the first place to check after
+      anything unexpected happens.
+    </p>
+  </div>
+
+  <div class="section-title" id="health">Health</div>
+  <div class="card">
+    <h3>What it's for <a href="/monitor">Open →</a></h3>
+    <p>
+      Independent, always-on monitoring for every physical node: a three-layer check every
+      <code>MONITOR_CHECK_INTERVAL</code> seconds (ping → DNS resolution against
+      <code>MONITOR_DOMAINS</code> → Pi-hole API reachability), a response-time sparkline per node, uptime,
+      current blocking status, and 24h query totals. Adjustable live from a dropdown on the page itself
+      (1–60 min) without touching environment variables.
+    </p>
+    <p>
+      <strong>Down confirmation:</strong> a single failed probe never immediately marks a node down — it
+      must fail <code>MONITOR_CONFIRM_ATTEMPTS</code> times in a row (default 3), spaced
+      <code>MONITOR_CONFIRM_INTERVAL_SECS</code> apart (default 45s), before the node is reported/shown as
+      down. This avoids a false alarm from a single transient blip (e.g. a node briefly under heavy load
+      from something like a Diagnostics run causing one slow DNS response). A healthy probe still returns
+      immediately, so this adds no delay to normal checks — only to a node that's actually failing.
+    </p>
+    <p>
+      <strong>Auto-heal:</strong> a node that fails <code>MONITOR_REBOOT_AFTER</code> consecutive checks
+      gets an SSH reboot, then up to <code>MONITOR_REBOOT_RETRIES</code> more attempts spaced
+      <code>MONITOR_REBOOT_AFTER_MINUTES</code> apart if it's still down. Every attempt is gated on cluster
+      quorum (at least 2 other nodes healthy) so this never fires while the cluster itself may be the
+      problem. If all retries are exhausted, the node is left down and flagged in the failure log — there's
+      no hypervisor-level escalation, on purpose, so a bad reboot loop can't take out the underlying VM/LXC
+      too.
+    </p>
+    <p>
+      <strong>VIP master &amp; manual failover</strong> — tracks which physical node currently holds the
+      keepalived VIP and keeps a history of master changes, plus a one-click manual failover (restarts
+      keepalived on the current master so the backup takes over). Entirely hidden from this page if
+      <code>PIHOLE_VIP</code> isn't set — see <a href="#failover">Failover</a> above for the DHCP-specific
+      half of VIP handling.
+    </p>
+    <p>
+      <strong>Diagnostics</strong> — runs a scripted health dump on a node over SSH (system resources,
+      <code>pihole-FTL</code>/keepalived status and journals, DNS resolution tests, DHCP config/leases,
+      rate-limiting activity) and pulls the report back into fleet-manager's own <code>/data</code> volume,
+      browsable from the "Saved diagnostics" list on this page — it doesn't just sit on the node
+      unreachable. Keeps the most recent <code>MONITOR_MAX_DIAG_REPORTS</code> (default 3) reports
+      <em>per node</em> — running it again on the same node prunes that node's oldest report, other
+      nodes' reports are untouched.
+    </p>
+    <p>
+      <strong>Maintenance mode</strong> — put a node into maintenance before working on it by hand (a
+      "Start maintenance" button on each node card, minutes-based, always auto-expires — no permanent-off
+      option). While active, this app's own automation leaves that node alone: no auto-reboot escalation,
+      no DHCP failover enforcement, and it's skipped by replication/drift/gravity/updater auto-rotation
+      (each retries it again next cycle). Health checks themselves keep running for visibility — only the
+      automated <em>reactions</em> are paused.
+    </p>
+    <p>
+      Requires <code>ping</code>/<code>dig</code> and the <code>NET_RAW</code> capability in the
+      container — both are already set up in the published image and <code>docker-compose.yml</code>.
+    </p>
+  </div>
+
+  <div class="section-title" id="troubleshooting">Troubleshooting &amp; tips</div>
+  <div class="card">
+    <ul>
+      <li><strong>A push says "blocked by validation"</strong> — two VLANs overlap, or a host/gateway/range
+        falls outside its own VLAN's subnet. Fix the offending VLAN on the VLANs tab; nothing is written
+        to any node until validation passes.</li>
+      <li><strong>A push warns about a missing group</strong> — the VLAN's <em>Pi-hole Group</em> name
+        doesn't exist yet on that node. Create it there directly, or enable
+        <em>Groups &amp; client assignments</em> replication so it propagates automatically.</li>
+      <li><strong>Replication says "fewer than 2 Pi-holes reachable"</strong> — check the Setup tab for
+        SSH/API connectivity to each node; replication needs at least 2 reachable nodes to have anything
+        to compare.</li>
+      <li><strong>Failover toggle does nothing</strong> — <code>PIHOLE_VIP</code> isn't set in the
+        environment. This is expected and safe if your cluster has no VIP.</li>
+      <li><strong>A device's hostname won't resolve from some nodes/VLANs but not others</strong> — that's
+        the exact problem <a href="#hostnames" style="color:var(--blue)">fleet-wide hostname resolution</a>
+        exists to fix; make sure the host has a hostname set and a static reservation (dynamic leases
+        aren't published), then push.</li>
+      <li><strong>Something looks stale after an edit</strong> — most pages poll automatically every few
+        seconds, but the VLANs page only reflects a push after you actually click the push button; editing
+        a VLAN or host alone doesn't touch the live nodes.</li>
+      <li><strong>Gravity update flagged as "dropped"</strong> — the node's blocklist domain count fell by
+        more than <code>GRAVITY_DROP_THRESHOLD_PERCENT</code> after an update. Check that node's own
+        internet/DNS connectivity and whether a specific blocklist URL is down; re-run the update once
+        that's fixed.</li>
+      <li><strong>Recovery clone reports errors partway through</strong> — the log shows exactly which step
+        failed (settings, groups/clients, or the VLAN push); the earlier steps that already succeeded are
+        not rolled back, so it's usually safe to just re-run the clone once the underlying issue (e.g. a
+        stale SSH key on the target) is fixed.</li>
+      <li><strong>External DHCP sync shows "Not configured"</strong> — expected unless
+        <code>EXTERNAL_DHCP_SOURCE</code> and the matching UniFi credentials are set; this feature is
+        inert by default.</li>
+      <li><strong>Every node on the Health page shows "ping_failed"</strong> — the container is missing the
+        <code>ping</code>/<code>dig</code> binaries or the <code>NET_RAW</code> capability. Both are already
+        included in the published image and <code>docker-compose.yml</code>; if you're on a custom build or
+        a bare <code>docker run</code>, make sure <code>iputils-ping</code>/<code>dnsutils</code> are
+        installed and <code>--cap-add=NET_RAW</code> is set.</li>
+      <li><strong>Reboot/Diagnostics silently fails with "Access denied" or "Please run as root"</strong> —
+        <code>PIHOLE_SSH_USER</code> is a non-root account without passwordless <code>sudo</code> for
+        <code>reboot</code>/<code>systemctl</code>/the diagnostics script. See
+        <a href="#setup" style="color:var(--blue)">Setup</a> and the SSH account requirements above.</li>
+      <li><strong>Updater shows a red "rotation halted" banner</strong> — an upgrade either failed outright
+        or failed its post-upgrade health check. Fix the affected node, confirm it's healthy on the
+        <a href="#health" style="color:var(--blue)">Health</a> page, then click <strong>Resume
+        rotation</strong> on the Updater page.</li>
+      <li><strong>Locked out after enabling Admin login</strong> — the password is written to this stack's
+        <code>.env</code> as <code>ADMIN_PASSWORD</code>; set it back to blank there and restart the
+        container to disable login entirely without needing to authenticate first.</li>
+      <li><strong>NetBox scan finds nothing / a VLAN has 0 hosts</strong> — the VLAN needs an associated
+        Prefix in NetBox's IPAM, and hosts need an IP Address assigned to a device/VM interface that has a
+        MAC address set (not just an IP with no assignment). Check <code>NETBOX_URL</code>/
+        <code>NETBOX_TOKEN</code> are set and <code>NETBOX_VERIFY_SSL</code> matches your NetBox's cert.</li>
+      <li><strong>Rollback reports errors partway through</strong> — same pattern as Recovery: the log
+        shows exactly which node/step failed, earlier successful steps aren't undone, and it's usually
+        safe to re-run the rollback once the underlying issue (e.g. a node unreachable at rollback time)
+        is fixed.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

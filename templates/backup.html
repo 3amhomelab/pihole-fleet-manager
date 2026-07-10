@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% block title %}Backup — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px;max-width:900px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:28px; }
+.section-title:first-child { margin-top:0; }
+.hint { font-size:12px;color:var(--muted); }
+
+.card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:24px; }
+.settings-row { display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px; }
+.settings-row select, .settings-row input { background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px; }
+.save-btn { background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer; }
+.save-btn:hover { background:rgba(255,255,255,.06); }
+
+.sync-btn { background:var(--blue-bg);border:1px solid var(--blue);color:var(--blue);border-radius:7px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer; }
+.sync-btn:hover:not(:disabled) { background:rgba(59,130,246,.25); }
+.sync-btn:disabled { opacity:.4;cursor:not-allowed; }
+.sync-status { font-size:13px;padding:6px 12px;border-radius:5px;display:none; }
+.sync-status.running { background:rgba(245,158,11,.12);color:var(--yellow); }
+.sync-status.success { background:var(--green-bg);color:var(--green); }
+.sync-status.error   { background:var(--red-bg);color:var(--red); }
+.log-card { background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:20px; }
+.log-header { display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted); }
+.log-body { padding:12px 16px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted);max-height:180px;overflow-y:auto;white-space:pre-wrap; }
+
+.backup-row { display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid rgba(45,53,80,.5);gap:14px;flex-wrap:wrap; }
+.backup-row:last-child { border-bottom:none; }
+.backup-name { font-family:var(--mono);font-size:13px;font-weight:600; }
+.backup-meta { font-size:11px;color:var(--muted);margin-top:3px; }
+.backup-trigger { font-size:10px;font-weight:700;padding:2px 9px;border-radius:999px;background:var(--blue-bg);color:var(--blue);text-transform:uppercase;letter-spacing:.03em; }
+.backup-actions { display:flex;gap:8px;align-items:center; }
+.action-btn { background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer; }
+.action-btn:hover { border-color:var(--blue);color:var(--blue); }
+.action-btn.danger:hover { border-color:var(--red);color:var(--red); }
+.empty-state { text-align:center;padding:24px;color:var(--muted);font-size:12px; }
+select.target-select { font-size:11px;padding:5px 8px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar"><h1>Backup</h1></div>
+
+<div class="container">
+  <p class="hint" style="margin-bottom:20px">
+    Point-in-time snapshots of every node's replication-managed settings, static reservations, groups,
+    client assignments, adlists, and domain overrides — the same fields multi-master replication keeps
+    in sync, captured to a file instead of pushed live. A snapshot is taken automatically right before
+    every replication push, gravity update, and software upgrade, so a bad change is always one rollback
+    away.
+  </p>
+
+  <div class="section-title">Settings</div>
+  <div class="card">
+    <div class="settings-row">
+      <label class="hint" for="keep-select">Keep the</label>
+      <select id="keep-select">
+        <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+        <option value="4">4</option><option value="5">5</option>
+      </select>
+      <label class="hint" for="keep-select">most recent snapshots</label>
+    </div>
+    <div class="settings-row">
+      <label class="hint" for="schedule-select">Also back up automatically</label>
+      <select id="schedule-select">
+        <option value="off">Off</option>
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly</option>
+        <option value="monthly">Monthly</option>
+      </select>
+      <button class="save-btn" onclick="saveSettings()">Save</button>
+    </div>
+    <p class="hint" id="settings-hint"></p>
+  </div>
+
+  <div class="section-title">Take a backup now</div>
+  <div class="card">
+    <div class="settings-row">
+      <button class="sync-btn" id="backup-btn" onclick="triggerBackup()">Back up now</button>
+      <span class="sync-status" id="backup-status"></span>
+    </div>
+    <div class="log-card">
+      <div class="log-header">Backup log <span id="log-ts"></span></div>
+      <div class="log-body" id="log-body">Ready.</div>
+    </div>
+  </div>
+
+  <div class="section-title">Snapshots</div>
+  <div class="card" id="backup-list">Loading…</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function loadSettings() {
+  const r = await fetch('/api/backup/settings');
+  const d = await r.json();
+  document.getElementById('keep-select').value = d.keep || 5;
+  document.getElementById('schedule-select').value = d.schedule || 'off';
+  const hint = document.getElementById('settings-hint');
+  hint.textContent = d.schedule === 'off'
+    ? 'No scheduled backups — snapshots are still taken automatically before every push/update/upgrade.'
+    : `Next scheduled backup runs ${d.schedule}` + (d.last_scheduled_run ? `, last ran ${new Date(d.last_scheduled_run).toLocaleString()}.` : '.');
+}
+async function saveSettings() {
+  const keep = parseInt(document.getElementById('keep-select').value, 10);
+  const schedule = document.getElementById('schedule-select').value;
+  await fetch('/api/backup/settings', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({keep, schedule}),
+  });
+  loadSettings();
+}
+
+let backupPoller = null;
+function renderBackupStatus(data) {
+  const st = document.getElementById('backup-status');
+  const btn = document.getElementById('backup-btn');
+  const log = document.getElementById('log-body');
+  const ts = document.getElementById('log-ts');
+  if (data.status && data.status !== 'idle') {
+    st.className = 'sync-status ' + data.status;
+    st.textContent = data.message || data.status;
+    st.style.display = '';
+  } else { st.style.display = 'none'; }
+  btn.disabled = data.status === 'running';
+  ts.textContent = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '';
+  const lines = data.log || [];
+  log.textContent = lines.length ? lines.join('\n') : 'Ready.';
+  log.scrollTop = log.scrollHeight;
+}
+async function pollBackup() {
+  try { const r = await fetch('/api/backup/status'); return r.ok ? await r.json() : null; }
+  catch { return null; }
+}
+async function triggerBackup() {
+  document.getElementById('backup-btn').disabled = true;
+  await fetch('/api/backup/take', {method: 'POST'});
+  clearInterval(backupPoller);
+  let n = 0;
+  backupPoller = setInterval(async () => {
+    n++;
+    const data = await pollBackup();
+    if (data) renderBackupStatus(data);
+    if (!data || data.status !== 'running' || n > 60) { clearInterval(backupPoller); loadBackups(); }
+  }, 2000);
+}
+async function refreshBackupStatus() { const d = await pollBackup(); if (d) renderBackupStatus(d); }
+
+async function loadBackups() {
+  const r = await fetch('/api/backup/list');
+  const d = await r.json();
+  renderBackups(d.backups || []);
+}
+
+function renderBackups(backups) {
+  const el = document.getElementById('backup-list');
+  if (!backups.length) { el.innerHTML = '<div class="empty-state">No snapshots yet — click "Back up now" above.</div>'; return; }
+  el.innerHTML = backups.map(b => `
+    <div class="backup-row">
+      <div>
+        <div class="backup-name">${esc(b.name)} <span class="backup-trigger">${esc(b.trigger)}</span></div>
+        <div class="backup-meta">${b.ts ? new Date(b.ts).toLocaleString() : ''} — ${b.node_ok_count}/${b.nodes.length} node(s) captured</div>
+      </div>
+      <div class="backup-actions">
+        <select class="target-select" id="target-${esc(b.name)}">
+          <option value="">All nodes</option>
+          ${b.nodes.map(ip => `<option value="${esc(ip)}">${esc(ip)}</option>`).join('')}
+        </select>
+        <button class="action-btn" onclick="rollback('${esc(b.name)}')">Roll back</button>
+        <button class="action-btn danger" onclick="deleteBackup('${esc(b.name)}')">Delete</button>
+      </div>
+    </div>`).join('');
+}
+
+async function rollback(name) {
+  const target = document.getElementById(`target-${name}`).value;
+  const targetLabel = target || 'ALL nodes';
+  if (!confirm(`Roll back ${targetLabel} to snapshot '${name}'? This overwrites current settings, static reservations, groups, adlists, and domain overrides on the target(s), then triggers a gravity update.`)) return;
+  await fetch(`/api/backup/${name}/rollback`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({target_ip: target || null}),
+  });
+  clearInterval(backupPoller);
+  let n = 0;
+  backupPoller = setInterval(async () => {
+    n++;
+    const data = await pollBackup();
+    if (data) renderBackupStatus(data);
+    if (!data || data.status !== 'running' || n > 90) clearInterval(backupPoller);
+  }, 2000);
+}
+
+async function deleteBackup(name) {
+  if (!confirm(`Delete snapshot '${name}'? This can't be undone.`)) return;
+  await fetch(`/api/backup/${name}`, {method: 'DELETE'});
+  loadBackups();
+}
+
+loadSettings();
+loadBackups();
+setInterval(refreshBackupStatus, 5000); refreshBackupStatus();
+setInterval(loadBackups, 15000);
+</script>
+{% endblock %}

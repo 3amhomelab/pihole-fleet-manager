@@ -1,0 +1,479 @@
+{% extends "base.html" %}
+{% block title %}Setup — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px;max-width:800px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:28px; }
+.section-title:first-child { margin-top:0; }
+
+.card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:24px; }
+
+/* Node status list */
+.node-row { display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(45,53,80,.5); }
+.node-row:last-child { border-bottom:none; }
+.node-ip { font-family:var(--mono);font-size:13px; }
+.node-badge { font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px; }
+.node-badge.ok   { background:var(--green-bg);color:var(--green); }
+.node-badge.fail { background:var(--red-bg);color:var(--red); }
+
+/* Form */
+.form-field { display:flex;flex-direction:column;gap:5px;margin-bottom:14px;max-width:320px; }
+.form-field label { font-size:12px;color:var(--muted); }
+.form-field input[type=password] { background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;outline:none; }
+.form-field input:focus { border-color:var(--blue); }
+.checkbox-row { display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;color:var(--muted); }
+.hint { font-size:12px;color:var(--muted);margin-top:6px; }
+
+.btn-primary { background:var(--blue);border:none;color:#fff;border-radius:6px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer; }
+.btn-primary:hover:not(:disabled) { background:#2563eb; }
+.btn-primary:disabled { opacity:.4;cursor:not-allowed; }
+
+.run-status { font-size:13px;padding:8px 12px;border-radius:6px;margin-top:14px;display:none; }
+.run-status.running { background:rgba(245,158,11,.12);color:var(--yellow); }
+.run-status.success { background:var(--green-bg);color:var(--green); }
+.run-status.error   { background:var(--red-bg);color:var(--red); }
+
+.log-card { background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted);max-height:180px;overflow-y:auto;white-space:pre-wrap;margin-top:14px; }
+
+/* Key output */
+.key-box { background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--mono);font-size:11px;color:var(--text);word-break:break-all;max-height:100px;overflow-y:auto;margin-top:10px; }
+.copy-btn { background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;margin-top:8px; }
+.copy-btn:hover { border-color:var(--blue);color:var(--blue); }
+
+/* Import existing scopes */
+.push-row { display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap; }
+.push-row select { background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 12px;font-size:13px; }
+.preview-btn { background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:8px 14px;font-size:13px;cursor:pointer; }
+.preview-btn:hover { border-color:var(--blue);color:var(--blue); }
+.host-status { font-size:11px;margin-left:4px; }
+.host-status.error { color:var(--red); }
+.host-status.ok    { color:var(--green); }
+.host-form { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px; }
+.vlan-tag { background:var(--border);color:var(--muted);border-radius:999px;padding:2px 10px;font-size:11px;margin-left:10px; }
+.form-actions { margin-top:16px;display:flex;align-items:center;gap:10px; }
+.form-error { color:var(--red);font-size:12px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar"><h1>Setup</h1></div>
+
+<div class="container">
+
+  <div class="section-title">Admin Login</div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:16px">
+      Off by default — anyone who can reach this app's URL can use it with no login at all. Turning
+      this on requires a password for every page and API call (session-based, so you only log in once
+      per browser). The password is saved back into this stack's own <code>.env</code> (<code>ADMIN_PASSWORD</code>),
+      same as the SSH key above — not just the <code>/data</code> volume.
+    </p>
+    <div id="auth-status"></div>
+    <div id="auth-enable-form" style="display:none;margin-top:14px">
+      <div class="form-field">
+        <label>New admin password</label>
+        <input type="password" id="f-admin-password" placeholder="••••••••">
+      </div>
+      <button class="btn-primary" onclick="enableAuth()">Enable admin login</button>
+    </div>
+  </div>
+
+  <div class="section-title">Fleet Nodes</div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:16px">
+      The Pi-hole node IPs every feature in this app operates on. Seeded once from
+      <code>PIHOLE_IPS</code> on first boot; after that, this list (not the env var) is
+      authoritative — adding or removing a node here takes effect immediately across every
+      loop (health monitor, replication, updater, gravity, failover), no restart needed.
+    </p>
+    <div id="fleet-node-list" style="margin-bottom:14px"></div>
+    <div class="host-form">
+      <input type="text" id="f-new-node-ip" placeholder="192.168.1.101" style="max-width:200px">
+      <button class="preview-btn" onclick="addFleetNode()">Add node</button>
+      <span class="host-status" id="fleet-node-error"></span>
+    </div>
+  </div>
+
+  <div class="section-title">Pi-hole SSH Trust</div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:16px">
+      Distributes this app's SSH key to every configured Pi-hole node so it can push
+      dnsmasq config and reload DNS. Safe to re-run any time — existing trust is left alone,
+      and only nodes that don't already have this key get updated. The target account
+      (<code>PIHOLE_SSH_USER</code>) doesn't need to be root — a non-root account with
+      passwordless sudo works too, and is required on nodes where root only allows
+      key-based login.
+    </p>
+
+    <div id="node-list"></div>
+
+    <div class="form-field" style="margin-top:20px">
+      <label>PIHOLE_SSH_USER's password (used once, only in-memory — never stored)</label>
+      <input type="password" id="f-password" placeholder="••••••••">
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="f-regenerate">
+      <label for="f-regenerate">Generate a brand-new key (replaces the current one, if any)</label>
+    </div>
+
+    <button class="btn-primary" id="run-btn" onclick="runSetup()">Run setup</button>
+    <span class="run-status" id="run-status"></span>
+    <div class="log-card" id="log-body" style="display:none"></div>
+
+    <div id="key-output" style="display:none;margin-top:18px">
+      <div class="section-title" style="margin-top:0">Private Key (base64)</div>
+      <p class="hint">
+        Already saved to the persistent /data volume — this app will keep using it across
+        restarts with no further action. It's also just been written back into this stack's
+        own .env on the host (PIHOLE_SSH_KEY_B64), so it survives even that volume being lost.
+        Copy this only if you want to reuse the same key in a <em>different</em> deployment's .env.
+      </p>
+      <div class="key-box" id="key-b64"></div>
+      <button class="copy-btn" onclick="copyKey()">Copy to clipboard</button>
+    </div>
+  </div>
+
+  <div class="section-title">Import Existing Scopes</div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:16px">
+      Reads back whatever's already deployed at <code>/etc/dnsmasq.d/</code> on a node —
+      useful for picking up VLANs pushed there by another instance (e.g. before a
+      migration) that aren't in this instance's local store yet — plus the node's own
+      standard Pi-hole scope and its static DHCP reservations, for a full picture of
+      what's already configured there.
+    </p>
+    <div class="push-row">
+      <select id="import-node"></select>
+      <button class="preview-btn" onclick="scanImport()">Scan a node for existing scopes</button>
+      <span class="host-status" id="import-status"></span>
+    </div>
+    <div id="import-list" style="margin-top:14px"></div>
+  </div>
+
+  <div class="section-title">Import from NetBox</div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:16px">
+      Reads VLANs and their associated Prefixes from NetBox's IPAM, plus every IP Address in that
+      prefix that's assigned to a device/VM interface with a MAC address, as candidate static host
+      reservations. Gateway and the DHCP-issuable range aren't modeled in NetBox, so both are a
+      best-effort guess — review and edit on the VLANs page after import. Read-only against NetBox;
+      requires <code>NETBOX_URL</code> and <code>NETBOX_TOKEN</code> to be set. Inert otherwise.
+    </p>
+    <div class="push-row">
+      <button class="preview-btn" onclick="scanNetbox()">Scan NetBox for VLANs</button>
+      <span class="host-status" id="netbox-status"></span>
+    </div>
+    <div id="netbox-list" style="margin-top:14px"></div>
+  </div>
+
+  <div class="section-title">External DHCP-Source Sync</div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:12px">
+      For setups where Pi-hole handles DNS only and DHCP is actually served by a different platform
+      (UniFi, pfSense, OPNsense) — Pi-hole never sees a lease in that topology, so every client shows up
+      as "Unknown". If configured (<code>EXTERNAL_DHCP_SOURCE</code> + the matching credentials env vars),
+      this pulls the client name/MAC/IP list from that platform and publishes it as local DNS records on
+      every node, same as this app already does for its own VLAN-managed DHCP. Currently only a UniFi OS
+      controller is implemented, and it hasn't been exercised against real UniFi hardware yet — treat it
+      as best-effort. Inert (does nothing) unless explicitly configured.
+    </p>
+    <div id="external-dhcp-status"></div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function loadNodeStatus() {
+  const r = await fetch('/api/setup/status');
+  const d = await r.json();
+  document.getElementById('node-list').innerHTML = (d.nodes || []).map(n => `
+    <div class="node-row">
+      <span class="node-ip">${n.ip}</span>
+      <span class="node-badge ${n.key_auth_ok ? 'ok' : 'fail'}">${n.key_auth_ok ? 'Key auth OK' : 'No key trust'}</span>
+    </div>`).join('') || '<p class="hint">No Pi-hole nodes configured (PIHOLE_IPS is empty).</p>';
+  document.getElementById('import-node').innerHTML =
+    (d.nodes || []).map(n => `<option value="${n.ip}">${n.ip}</option>`).join('');
+  return d;
+}
+
+let poller = null;
+function renderRunStatus(job) {
+  const st  = document.getElementById('run-status');
+  const btn = document.getElementById('run-btn');
+  const log = document.getElementById('log-body');
+  if (job.status && job.status !== 'idle') {
+    st.className = 'run-status ' + job.status;
+    st.textContent = job.message || job.status;
+    st.style.display = '';
+  } else { st.style.display = 'none'; }
+  btn.disabled = job.status === 'running';
+
+  const lines = job.log || [];
+  log.style.display = lines.length ? '' : 'none';
+  log.textContent = lines.join('\n');
+  log.scrollTop = log.scrollHeight;
+
+  if (job.status === 'success' && job.key_b64) {
+    document.getElementById('key-output').style.display = '';
+    document.getElementById('key-b64').textContent = job.key_b64;
+  }
+}
+
+async function pollStatus() {
+  try {
+    const r = await fetch('/api/setup/status');
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+async function runSetup() {
+  const password = document.getElementById('f-password').value;
+  const regenerate = document.getElementById('f-regenerate').checked;
+  if (!password) { alert('Password required'); return; }
+  if (regenerate && !confirm('This replaces the current key entirely. Continue?')) return;
+
+  document.getElementById('run-btn').disabled = true;
+  await fetch('/api/setup/run', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password, regenerate}),
+  });
+  document.getElementById('f-password').value = '';
+
+  clearInterval(poller);
+  let n = 0;
+  poller = setInterval(async () => {
+    n++;
+    const d = await pollStatus();
+    if (d) { renderRunStatus(d.job); }
+    if (!d || d.job.status !== 'running' || n > 60) {
+      clearInterval(poller);
+      if (d) loadNodeStatus();
+    }
+  }, 2000);
+}
+
+function copyKey() {
+  const text = document.getElementById('key-b64').textContent;
+  navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard'));
+}
+
+// --- Import existing scopes (read back from a node's live dnsmasq.d config) ---
+let importCandidates = [];
+
+async function scanImport() {
+  const ip = document.getElementById('import-node').value;
+  const stEl = document.getElementById('import-status');
+  stEl.className = 'host-status'; stEl.textContent = 'Scanning…';
+  document.getElementById('import-list').innerHTML = '';
+  try {
+    const r = await fetch('/api/vlans/import/preview' + (ip ? `?ip=${encodeURIComponent(ip)}` : ''));
+    const d = await r.json();
+    if (!d.ok) { stEl.className = 'host-status error'; stEl.textContent = d.error || 'Scan failed'; return; }
+    importCandidates = d.vlans || [];
+    stEl.className = 'host-status ok';
+    stEl.textContent = importCandidates.length
+      ? `Scanned ${d.ip} — found ${importCandidates.length} scope(s)`
+      : `Scanned ${d.ip} — no extra scopes found there`;
+    renderImportList();
+  } catch (e) {
+    stEl.className = 'host-status error'; stEl.textContent = 'Scan failed';
+  }
+}
+
+function renderImportList() {
+  const listEl = document.getElementById('import-list');
+  if (!importCandidates.length) { listEl.innerHTML = ''; return; }
+  listEl.innerHTML = importCandidates.map(v => `
+    <div class="host-form" style="justify-content:space-between">
+      <label style="display:flex;align-items:center;gap:8px;${v.already_exists ? 'opacity:.5' : ''}">
+        <input type="checkbox" data-import-id="${esc(v.id)}" ${v.already_exists ? 'disabled' : ''}>
+        <span><strong>${esc(v.name)}</strong> — ${esc(v.subnet)}/${v.prefix}, ${(v.hosts||[]).length} host(s)</span>
+        ${v.already_exists ? '<span class="vlan-tag">Already imported</span>' : ''}
+      </label>
+    </div>`).join('') + `
+    <div class="form-actions">
+      <button class="btn-primary" onclick="applyImport()">Import selected</button>
+      <span class="form-error" id="import-apply-error"></span>
+    </div>`;
+}
+
+async function applyImport() {
+  const ip = document.getElementById('import-node').value;
+  const ids = [...document.querySelectorAll('[data-import-id]:checked')].map(el => el.dataset.importId);
+  const errEl = document.getElementById('import-apply-error');
+  errEl.textContent = '';
+  if (!ids.length) { errEl.textContent = 'Select at least one scope'; return; }
+  const r = await fetch('/api/vlans/import', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids, ip})});
+  const d = await r.json();
+  if (d.errors && d.errors.length) errEl.textContent = d.errors.join('; ');
+  if (d.imported && d.imported.length) {
+    importCandidates = [];
+    document.getElementById('import-list').innerHTML = '';
+    document.getElementById('import-status').textContent =
+      `Imported ${d.imported.length} scope(s) — check the VLANs tab.`;
+  }
+}
+
+// --- Fleet nodes ---
+async function loadFleetNodes() {
+  const r = await fetch('/api/nodes');
+  const d = await r.json();
+  document.getElementById('fleet-node-list').innerHTML = (d.ips || []).map(ip => `
+    <div class="node-row">
+      <span class="node-ip">${esc(ip)}</span>
+      <button class="preview-btn" onclick="removeFleetNode('${esc(ip)}')">Remove</button>
+    </div>`).join('') || '<p class="hint">No nodes configured yet.</p>';
+}
+async function addFleetNode() {
+  const input = document.getElementById('f-new-node-ip');
+  const errEl = document.getElementById('fleet-node-error');
+  errEl.className = 'host-status'; errEl.textContent = '';
+  const r = await fetch('/api/nodes', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ip: input.value.trim()}),
+  });
+  const d = await r.json();
+  if (!d.ok) { errEl.className = 'host-status error'; errEl.textContent = d.error || 'Could not add node'; return; }
+  input.value = '';
+  loadFleetNodes();
+  loadNodeStatus();
+}
+async function removeFleetNode(ip) {
+  if (!confirm(`Remove ${ip} from the fleet? This app will stop monitoring/managing it (the node itself is untouched).`)) return;
+  await fetch(`/api/nodes/${ip}`, {method: 'DELETE'});
+  loadFleetNodes();
+  loadNodeStatus();
+}
+loadFleetNodes();
+
+(async () => {
+  const d = await loadNodeStatus();
+  renderRunStatus(d.job);
+})();
+
+// --- Admin login ---
+async function loadAuthStatus() {
+  const r = await fetch('/api/auth/status');
+  const d = await r.json();
+  const statusEl = document.getElementById('auth-status');
+  const formEl = document.getElementById('auth-enable-form');
+  if (d.enabled) {
+    statusEl.innerHTML = `<span class="node-badge ok">Admin login is ON</span> <button class="preview-btn" style="margin-left:10px" onclick="disableAuth()">Disable</button>`;
+    formEl.style.display = 'none';
+  } else {
+    statusEl.innerHTML = `<span class="node-badge fail">Admin login is OFF</span>`;
+    formEl.style.display = '';
+  }
+}
+async function enableAuth() {
+  const password = document.getElementById('f-admin-password').value;
+  if (!password) { alert('Password required'); return; }
+  const r = await fetch('/api/auth/enable', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password}),
+  });
+  const d = await r.json();
+  if (!d.ok) { alert(d.error || 'Could not enable admin login'); return; }
+  document.getElementById('f-admin-password').value = '';
+  loadAuthStatus();
+}
+async function disableAuth() {
+  if (!confirm('Disable admin login? Anyone who can reach this app will be able to use it with no password.')) return;
+  await fetch('/api/auth/disable', {method: 'POST'});
+  loadAuthStatus();
+}
+loadAuthStatus();
+
+// --- NetBox import ---
+let netboxCandidates = [];
+
+async function scanNetbox() {
+  const stEl = document.getElementById('netbox-status');
+  stEl.className = 'host-status'; stEl.textContent = 'Scanning…';
+  document.getElementById('netbox-list').innerHTML = '';
+  try {
+    const r = await fetch('/api/netbox/preview');
+    const d = await r.json();
+    if (!d.ok) { stEl.className = 'host-status error'; stEl.textContent = d.error || 'Scan failed'; return; }
+    netboxCandidates = d.vlans || [];
+    stEl.className = 'host-status ok';
+    stEl.textContent = netboxCandidates.length
+      ? `Found ${netboxCandidates.length} VLAN(s) in NetBox`
+      : 'No VLANs with a resolvable prefix found in NetBox';
+    renderNetboxList();
+  } catch (e) {
+    stEl.className = 'host-status error'; stEl.textContent = 'Scan failed';
+  }
+}
+
+function renderNetboxList() {
+  const listEl = document.getElementById('netbox-list');
+  if (!netboxCandidates.length) { listEl.innerHTML = ''; return; }
+  listEl.innerHTML = netboxCandidates.map((v, i) => `
+    <div class="host-form" style="justify-content:space-between">
+      <label style="display:flex;align-items:center;gap:8px;${v.already_exists ? 'opacity:.5' : ''}">
+        <input type="checkbox" data-netbox-idx="${i}" ${v.already_exists ? 'disabled' : ''}>
+        <span><strong>${esc(v.name)}</strong>${v.vlan_tag ? ` (tag ${v.vlan_tag})` : ''} — ${esc(v.subnet)}/${v.prefix},
+          ${v.hosts.length} host(s) with a MAC${v.hosts_skipped ? `, ${v.hosts_skipped} skipped (no MAC)` : ''}</span>
+        ${v.already_exists ? '<span class="vlan-tag">Already imported</span>' : ''}
+      </label>
+    </div>`).join('') + `
+    <div class="form-actions">
+      <button class="btn-primary" onclick="applyNetboxImport()">Import selected</button>
+      <span class="form-error" id="netbox-apply-error"></span>
+    </div>`;
+}
+
+async function applyNetboxImport() {
+  const idxs = [...document.querySelectorAll('[data-netbox-idx]:checked')].map(el => parseInt(el.dataset.netboxIdx, 10));
+  const errEl = document.getElementById('netbox-apply-error');
+  errEl.textContent = '';
+  if (!idxs.length) { errEl.textContent = 'Select at least one VLAN'; return; }
+  const vlans = idxs.map(i => netboxCandidates[i]);
+  const r = await fetch('/api/netbox/import', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({vlans}),
+  });
+  const d = await r.json();
+  if (d.errors && d.errors.length) errEl.textContent = d.errors.join('; ');
+  if (d.imported && d.imported.length) {
+    netboxCandidates = [];
+    document.getElementById('netbox-list').innerHTML = '';
+    document.getElementById('netbox-status').textContent =
+      `Imported: ${d.imported.join('; ')} — check the VLANs tab.`;
+  }
+}
+
+// --- External DHCP-source sync status ---
+async function loadExternalDhcp() {
+  const r = await fetch('/api/external-dhcp');
+  const d = await r.json();
+  const el = document.getElementById('external-dhcp-status');
+  if (!d.enabled) {
+    el.innerHTML = `<p class="hint">Not configured — set <code>EXTERNAL_DHCP_SOURCE=unifi</code> plus <code>UNIFI_HOST</code>/<code>UNIFI_USER</code>/<code>UNIFI_PASSWORD</code> to enable.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="node-row">
+      <span>Source: <strong>${esc(d.source_kind)}</strong></span>
+      <span class="node-badge ${d.status === 'success' ? 'ok' : (d.status === 'error' ? 'fail' : '')}">${esc(d.status || 'idle')}</span>
+    </div>
+    <p class="hint" style="margin-top:8px">${esc(d.message || '')} — ${d.clients_found || 0} client(s) last sync</p>
+    <button class="preview-btn" onclick="syncExternalDhcp()">Sync now</button>
+  `;
+}
+async function syncExternalDhcp() {
+  await fetch('/api/external-dhcp/sync', {method: 'POST'});
+  setTimeout(loadExternalDhcp, 1500);
+}
+loadExternalDhcp();
+</script>
+{% endblock %}

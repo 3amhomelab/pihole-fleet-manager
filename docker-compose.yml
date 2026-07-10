@@ -1,0 +1,54 @@
+services:
+  pihole-fleet-manager:
+    image: 3amhomelab/pihole-fleet-manager:latest
+    container_name: fleet-manager
+    ports:
+      - "${APP_PORT:-9490}:8080"
+    volumes:
+      - pihole_fleet_manager_data:/data
+      # Bind-mounts this .env so the Setup tab can write a freshly generated
+      # SSH key straight back to it — instant, no redeploy needed.
+      - ./.env:/config/host.env
+    environment:
+      - PIHOLE_IPS=${PIHOLE_IPS}
+      - PIHOLE_ADMIN_PASSWORD=${PIHOLE_ADMIN_PASSWORD}
+      - PIHOLE_SSH_USER=${PIHOLE_SSH_USER:-root}
+      - PIHOLE_SSH_KEY=${PIHOLE_SSH_KEY:-/data/ssh/pihole_key}
+      - PIHOLE_SSH_KEY_B64=${PIHOLE_SSH_KEY_B64}
+      - DNSMASQ_CONF_NAME=${DNSMASQ_CONF_NAME:-10-vlans.conf}
+      - PIHOLE_UPDATER_HOUR=${PIHOLE_UPDATER_HOUR:-3}
+      - UPGRADE_RETRIES=${UPGRADE_RETRIES:-3}
+      - UPDATER_VERSION_POLL_SECS=${UPDATER_VERSION_POLL_SECS:-3600}
+      - PIHOLE_VIP=${PIHOLE_VIP}
+      - DHCP_FAILOVER_CHECK_INTERVAL_SECS=${DHCP_FAILOVER_CHECK_INTERVAL_SECS:-15}
+      - GRAVITY_UPDATE_HOUR=${GRAVITY_UPDATE_HOUR:-4}
+      - GRAVITY_DROP_THRESHOLD_PERCENT=${GRAVITY_DROP_THRESHOLD_PERCENT:-10}
+      - EXTERNAL_DHCP_SOURCE=${EXTERNAL_DHCP_SOURCE}
+      - EXTERNAL_DHCP_POLL_SECS=${EXTERNAL_DHCP_POLL_SECS:-300}
+      - UNIFI_HOST=${UNIFI_HOST}
+      - UNIFI_USER=${UNIFI_USER}
+      - UNIFI_PASSWORD=${UNIFI_PASSWORD}
+      - UNIFI_SITE=${UNIFI_SITE:-default}
+      - MONITOR_CHECK_INTERVAL=${MONITOR_CHECK_INTERVAL:-60}
+      - MONITOR_DOMAINS=${MONITOR_DOMAINS:-google.com,cloudflare.com}
+      - MONITOR_DNS_RETRIES=${MONITOR_DNS_RETRIES:-3}
+      - MONITOR_CONFIRM_ATTEMPTS=${MONITOR_CONFIRM_ATTEMPTS:-3}
+      - MONITOR_CONFIRM_INTERVAL_SECS=${MONITOR_CONFIRM_INTERVAL_SECS:-45}
+      - MONITOR_REBOOT_AFTER=${MONITOR_REBOOT_AFTER:-3}
+      - MONITOR_REBOOT_RETRIES=${MONITOR_REBOOT_RETRIES:-2}
+      - MONITOR_REBOOT_AFTER_MINUTES=${MONITOR_REBOOT_AFTER_MINUTES:-10}
+      - MONITOR_UPTIME_INTERVAL=${MONITOR_UPTIME_INTERVAL:-300}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - NOTIFY_WEBHOOK_URL=${NOTIFY_WEBHOOK_URL}
+      - UPDATER_POST_UPGRADE_WAIT_SECS=${UPDATER_POST_UPGRADE_WAIT_SECS:-90}
+      - NETBOX_URL=${NETBOX_URL}
+      - NETBOX_TOKEN=${NETBOX_TOKEN}
+      - NETBOX_VERIFY_SSL=${NETBOX_VERIFY_SSL:-false}
+      - PORT=8080
+      - TZ=${TZ:-UTC}
+    cap_add:
+      - NET_RAW
+    restart: unless-stopped
+
+volumes:
+  pihole_fleet_manager_data:

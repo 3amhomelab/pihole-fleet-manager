@@ -1,0 +1,446 @@
+{% extends "base.html" %}
+{% block title %}Getting Started — Pihole Fleet Manager{% endblock %}
+
+{% block styles %}
+<style>
+.toolbar { background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between; }
+.toolbar h1 { font-size:16px;font-weight:600; }
+.container { padding:22px 24px;max-width:820px; }
+.section-title { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;margin-top:28px;display:flex;align-items:center;gap:8px; }
+.section-title:first-child { margin-top:0; }
+.step-num { display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:var(--blue-bg);color:var(--blue);font-size:10px;font-weight:700; }
+.hint { font-size:12px;color:var(--muted); }
+
+.card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:24px; }
+.badge { display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:999px;margin-left:8px; }
+.badge.ok      { background:var(--green-bg);color:var(--green); }
+.badge.not-set { background:rgba(245,158,11,.12);color:var(--yellow); }
+
+.form-field { display:flex;flex-direction:column;gap:5px;margin-bottom:14px;max-width:360px; }
+.form-field label { font-size:12px;color:var(--muted); }
+.form-field input, .form-field select { background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;outline:none; }
+.form-field input:focus, .form-field select:focus { border-color:var(--blue); }
+.checkbox-row { display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;color:var(--muted); }
+
+.btn-primary { background:var(--blue);border:none;color:#fff;border-radius:6px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer; }
+.btn-primary:hover:not(:disabled) { background:#2563eb; }
+.btn-primary:disabled { opacity:.4;cursor:not-allowed; }
+.preview-btn { background:none;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:8px 14px;font-size:13px;cursor:pointer; }
+.preview-btn:hover { border-color:var(--blue);color:var(--blue); }
+
+.node-row { display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(45,53,80,.5); }
+.node-row:last-child { border-bottom:none; }
+.node-ip { font-family:var(--mono);font-size:13px; }
+.node-badge { font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px; }
+.node-badge.ok   { background:var(--green-bg);color:var(--green); }
+.node-badge.fail { background:var(--red-bg);color:var(--red); }
+.host-form { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px; }
+.host-status { font-size:11px;margin-left:4px; }
+.host-status.error { color:var(--red); }
+.host-status.ok    { color:var(--green); }
+
+.run-status { font-size:13px;padding:8px 12px;border-radius:6px;margin-top:14px;display:none; }
+.run-status.running { background:rgba(245,158,11,.12);color:var(--yellow); }
+.run-status.success { background:var(--green-bg);color:var(--green); }
+.run-status.error   { background:var(--red-bg);color:var(--red); }
+.log-card { background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted);max-height:160px;overflow-y:auto;white-space:pre-wrap;margin-top:14px; }
+
+.restart-banner { position:sticky;top:0;z-index:5;display:none;align-items:center;justify-content:space-between;gap:14px;background:rgba(245,158,11,.12);border:1px solid var(--yellow);color:var(--yellow);border-radius:8px;padding:12px 16px;margin-bottom:20px;font-size:13px; }
+.restart-banner code { background:rgba(0,0,0,.2);border-radius:4px;padding:1px 5px; }
+.finish-row { display:flex;justify-content:center;margin-top:12px;margin-bottom:20px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar"><h1>Getting Started</h1></div>
+
+<div class="container">
+  <p class="hint" style="margin-bottom:20px">
+    One guided pass over everything this app can do — required cluster basics first, then optional
+    features you can enable or skip. Nothing here does anything you can't already do from the individual
+    tabs; this just puts it all in one place with the required <code>.env</code> variables filled in for
+    you instead of hand-edited.
+  </p>
+
+  <div class="restart-banner" id="restart-banner">
+    <span id="restart-message"></span>
+  </div>
+
+  <div class="section-title"><span class="step-num">1</span> Pi-hole Cluster</div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:14px">The Pi-hole node IPs this app manages, plus the Pi-hole v6 admin password used to authenticate against every node's API.</p>
+    <div id="wiz-node-list" style="margin-bottom:14px"></div>
+    <div class="host-form">
+      <input type="text" id="wiz-new-node-ip" placeholder="192.168.1.101" style="max-width:200px">
+      <button class="preview-btn" onclick="addWizNode()">Add node</button>
+      <span class="host-status" id="wiz-node-error"></span>
+    </div>
+    <div class="form-field" style="margin-top:16px">
+      <label>Pi-hole admin password <span class="badge" id="wiz-password-badge"></span></label>
+      <input type="password" id="wiz-admin-password" placeholder="Leave blank to keep the current one">
+    </div>
+    <div class="form-field">
+      <label>SSH user (default <code>root</code> — only change if using a non-root account with passwordless sudo)</label>
+      <input type="text" id="wiz-ssh-user" placeholder="root">
+    </div>
+    <button class="btn-primary" onclick="saveClusterBasics()">Save</button>
+  </div>
+
+  <div class="section-title"><span class="step-num">2</span> SSH Trust</div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:14px">
+      Distributes this app's SSH key to every node above so it can push DHCP config and reload DNS.
+      Safe to re-run any time.
+    </p>
+    <div id="wiz-ssh-status"></div>
+    <div class="form-field" style="margin-top:14px">
+      <label>SSH password (used once, in-memory only — never stored)</label>
+      <input type="password" id="wiz-ssh-password" placeholder="••••••••">
+    </div>
+    <button class="btn-primary" id="wiz-ssh-run-btn" onclick="runSshSetup()">Run setup</button>
+    <span class="run-status" id="wiz-ssh-run-status"></span>
+    <div class="log-card" id="wiz-ssh-log" style="display:none"></div>
+  </div>
+
+  <div class="section-title"><span class="step-num">3</span> VIP &amp; DHCP Failover <span class="hint">(optional)</span></div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:14px">
+      If a keepalived VIP already sits in front of the cluster for DNS, set it here so the Failover tab
+      can keep DHCP active on only the current VIP master. Leave blank if there's no VIP.
+    </p>
+    <div class="form-field">
+      <label>Pi-hole VIP</label>
+      <input type="text" id="wiz-vip" placeholder="192.168.1.100">
+    </div>
+    <button class="btn-primary" onclick="saveVip()">Save</button>
+    <div class="checkbox-row" style="margin-top:16px">
+      <input type="checkbox" id="wiz-failover-enabled" onchange="toggleFailover(this.checked)">
+      <label for="wiz-failover-enabled">Enable DHCP failover enforcement (takes effect immediately, no restart — but needs the VIP above set and the container restarted first)</label>
+    </div>
+  </div>
+
+  <div class="section-title"><span class="step-num">4</span> External DHCP Source <span class="hint">(optional, UniFi only)</span></div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:14px">
+      For setups where Pi-hole handles DNS only and DHCP is served by UniFi — pulls the client name/MAC/IP
+      list from a UniFi OS controller so devices don't show up as "Unknown." Leave source blank to disable.
+    </p>
+    <div class="form-field">
+      <label>Source</label>
+      <select id="wiz-dhcp-source">
+        <option value="">Disabled</option>
+        <option value="unifi">UniFi</option>
+      </select>
+    </div>
+    <div class="form-field">
+      <label>UniFi controller host (no scheme/port)</label>
+      <input type="text" id="wiz-unifi-host" placeholder="192.168.1.1">
+    </div>
+    <div class="form-field">
+      <label>UniFi username</label>
+      <input type="text" id="wiz-unifi-user">
+    </div>
+    <div class="form-field">
+      <label>UniFi password <span class="badge" id="wiz-unifi-password-badge"></span></label>
+      <input type="password" id="wiz-unifi-password" placeholder="Leave blank to keep the current one">
+    </div>
+    <div class="form-field">
+      <label>UniFi site</label>
+      <input type="text" id="wiz-unifi-site" placeholder="default">
+    </div>
+    <button class="btn-primary" onclick="saveExternalDhcp()">Save</button>
+  </div>
+
+  <div class="section-title"><span class="step-num">5</span> Notifications <span class="hint">(optional)</span></div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:14px">
+      A generic webhook — works with Home Assistant's REST API, ntfy, a Telegram bridge, n8n, or anything
+      else that takes a webhook. Fires on a node left down, a gravity partial-failure, an upgrade failure,
+      or a failed post-upgrade health check. Leave blank to disable.
+    </p>
+    <div class="form-field">
+      <label>Webhook URL <span class="badge" id="wiz-webhook-badge"></span></label>
+      <input type="text" id="wiz-webhook-url" placeholder="https://ha.example.com/api/webhook/...">
+    </div>
+    <button class="btn-primary" onclick="saveWebhook()">Save</button>
+  </div>
+
+  <div class="section-title"><span class="step-num">6</span> NetBox Import <span class="hint">(optional)</span></div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:14px">
+      Read-only import of VLANs and static host reservations from NetBox's IPAM+DCIM (Setup tab, once
+      configured). Leave URL blank to disable.
+    </p>
+    <div class="form-field">
+      <label>NetBox URL</label>
+      <input type="text" id="wiz-netbox-url" placeholder="https://netbox.example.com">
+    </div>
+    <div class="form-field">
+      <label>API token <span class="badge" id="wiz-netbox-token-badge"></span></label>
+      <input type="password" id="wiz-netbox-token" placeholder="Leave blank to keep the current one">
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="wiz-netbox-verify-ssl">
+      <label for="wiz-netbox-verify-ssl">Verify TLS certificate (leave unchecked for a self-signed NetBox cert)</label>
+    </div>
+    <button class="btn-primary" onclick="saveNetbox()">Save</button>
+  </div>
+
+  <div class="section-title"><span class="step-num">7</span> Admin Login <span class="hint">(optional)</span></div>
+  <div class="card">
+    <p class="hint" style="margin-bottom:14px">
+      Off by default — every page and API call is open to anyone who can reach this app. Turning this on
+      requires a password afterward (session-based, no restart needed).
+    </p>
+    <div id="wiz-auth-status" style="margin-bottom:14px"></div>
+    <div id="wiz-auth-enable-form">
+      <div class="form-field">
+        <label>New admin password</label>
+        <input type="password" id="wiz-admin-login-password" placeholder="••••••••">
+      </div>
+      <button class="btn-primary" onclick="enableWizAuth()">Enable admin login</button>
+    </div>
+  </div>
+
+  <div class="finish-row">
+    <a href="/" class="btn-primary" style="text-decoration:none;display:inline-block">Done — go to VLANs</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+const changedKeys = new Set();
+function flagRestart(keys) {
+  keys.forEach(k => changedKeys.add(k));
+  const banner = document.getElementById('restart-banner');
+  banner.style.display = 'flex';
+  document.getElementById('restart-message').innerHTML =
+    `Restart the container to apply changes to: <code>${[...changedKeys].join('</code>, <code>')}</code> ` +
+    `— in Dockge, stop then start the fleet-manager stack (or <code>docker compose restart</code> from the stack directory).`;
+}
+
+async function saveEnv(updates, restartKeys) {
+  const r = await fetch('/api/wizard/env', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(updates),
+  });
+  const d = await r.json();
+  if (!d.ok) { alert(d.error || 'Save failed'); return false; }
+  flagRestart(restartKeys);
+  return true;
+}
+
+let wizStatus = {};
+async function loadWizardStatus() {
+  const r = await fetch('/api/wizard/status');
+  wizStatus = await r.json();
+  render();
+}
+
+function render() {
+  // Cluster nodes
+  document.getElementById('wiz-node-list').innerHTML = (wizStatus.nodes || []).map(ip => `
+    <div class="node-row">
+      <span class="node-ip">${esc(ip)}</span>
+      <button class="preview-btn" onclick="removeWizNode('${esc(ip)}')">Remove</button>
+    </div>`).join('') || '<p class="hint">No nodes configured yet.</p>';
+
+  document.getElementById('wiz-ssh-user').value = wizStatus.pihole_ssh_user || 'root';
+  setBadge('wiz-password-badge', wizStatus.pihole_admin_password_set);
+
+  // VIP / failover
+  if (document.activeElement.id !== 'wiz-vip') {
+    document.getElementById('wiz-vip').value = wizStatus.pihole_vip || '';
+  }
+  document.getElementById('wiz-failover-enabled').checked = !!wizStatus.failover_enabled;
+
+  // External DHCP
+  document.getElementById('wiz-dhcp-source').value = wizStatus.external_dhcp_source || '';
+  document.getElementById('wiz-unifi-host').value = wizStatus.unifi_host || '';
+  document.getElementById('wiz-unifi-user').value = wizStatus.unifi_user || '';
+  document.getElementById('wiz-unifi-site').value = wizStatus.unifi_site || 'default';
+  setBadge('wiz-unifi-password-badge', wizStatus.unifi_password_set);
+
+  // Notifications
+  setBadge('wiz-webhook-badge', wizStatus.notify_webhook_set);
+
+  // NetBox
+  document.getElementById('wiz-netbox-url').value = wizStatus.netbox_url || '';
+  document.getElementById('wiz-netbox-verify-ssl').checked = wizStatus.netbox_verify_ssl === 'true';
+  setBadge('wiz-netbox-token-badge', wizStatus.netbox_token_set);
+
+  // Admin login
+  const authEl = document.getElementById('wiz-auth-status');
+  const authForm = document.getElementById('wiz-auth-enable-form');
+  if (wizStatus.auth_enabled) {
+    authEl.innerHTML = `<span class="node-badge ok">Admin login is ON</span> <button class="preview-btn" style="margin-left:10px" onclick="disableWizAuth()">Disable</button>`;
+    authForm.style.display = 'none';
+  } else {
+    authEl.innerHTML = `<span class="node-badge fail">Admin login is OFF</span>`;
+    authForm.style.display = '';
+  }
+}
+
+function setBadge(id, isSet) {
+  const el = document.getElementById(id);
+  el.className = 'badge ' + (isSet ? 'ok' : 'not-set');
+  el.textContent = isSet ? 'set' : 'not set';
+}
+
+// --- Step 1: cluster nodes + password/ssh user ---
+async function addWizNode() {
+  const input = document.getElementById('wiz-new-node-ip');
+  const errEl = document.getElementById('wiz-node-error');
+  errEl.className = 'host-status'; errEl.textContent = '';
+  const r = await fetch('/api/nodes', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ip: input.value.trim()}),
+  });
+  const d = await r.json();
+  if (!d.ok) { errEl.className = 'host-status error'; errEl.textContent = d.error || 'Could not add node'; return; }
+  input.value = '';
+  loadWizardStatus();
+}
+async function removeWizNode(ip) {
+  if (!confirm(`Remove ${ip} from the fleet?`)) return;
+  await fetch(`/api/nodes/${ip}`, {method: 'DELETE'});
+  loadWizardStatus();
+}
+async function saveClusterBasics() {
+  const password = document.getElementById('wiz-admin-password').value;
+  const sshUser = document.getElementById('wiz-ssh-user').value.trim() || 'root';
+  // Applies immediately (see workers/credentials.py) — no restart banner,
+  // unlike the optional-feature env vars below which still need one.
+  const body = {ssh_user: sshUser};
+  if (password) body.admin_password = password;
+  await fetch('/api/wizard/credentials', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  document.getElementById('wiz-admin-password').value = '';
+  loadWizardStatus();
+}
+
+// --- Step 2: SSH trust ---
+let sshPoller = null;
+async function loadSshStatus() {
+  const r = await fetch('/api/setup/status');
+  const d = await r.json();
+  document.getElementById('wiz-ssh-status').innerHTML = (d.nodes || []).map(n => `
+    <div class="node-row">
+      <span class="node-ip">${esc(n.ip)}</span>
+      <span class="node-badge ${n.key_auth_ok ? 'ok' : 'fail'}">${n.key_auth_ok ? 'Key auth OK' : 'No key trust'}</span>
+    </div>`).join('') || '<p class="hint">No nodes configured yet — add one in Step 1.</p>';
+  renderSshRunStatus(d.job);
+}
+function renderSshRunStatus(job) {
+  const st = document.getElementById('wiz-ssh-run-status');
+  const btn = document.getElementById('wiz-ssh-run-btn');
+  const log = document.getElementById('wiz-ssh-log');
+  if (job.status && job.status !== 'idle') {
+    st.className = 'run-status ' + job.status;
+    st.textContent = job.message || job.status;
+    st.style.display = '';
+  } else { st.style.display = 'none'; }
+  btn.disabled = job.status === 'running';
+  const lines = job.log || [];
+  log.style.display = lines.length ? '' : 'none';
+  log.textContent = lines.join('\n');
+}
+async function runSshSetup() {
+  const password = document.getElementById('wiz-ssh-password').value;
+  if (!password) { alert('Password required'); return; }
+  document.getElementById('wiz-ssh-run-btn').disabled = true;
+  await fetch('/api/setup/run', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password, regenerate: false}),
+  });
+  document.getElementById('wiz-ssh-password').value = '';
+  clearInterval(sshPoller);
+  let n = 0;
+  sshPoller = setInterval(async () => {
+    n++;
+    await loadSshStatus();
+    const r = await fetch('/api/setup/status');
+    const d = await r.json();
+    if (d.job.status !== 'running' || n > 60) clearInterval(sshPoller);
+  }, 2000);
+}
+
+// --- Step 3: VIP + failover ---
+async function saveVip() {
+  const vip = document.getElementById('wiz-vip').value.trim();
+  if (await saveEnv({PIHOLE_VIP: vip}, ['PIHOLE_VIP'])) loadWizardStatus();
+}
+async function toggleFailover(enabled) {
+  await fetch('/api/failover/enabled', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled}),
+  });
+}
+
+// --- Step 4: external DHCP ---
+async function saveExternalDhcp() {
+  const updates = {
+    EXTERNAL_DHCP_SOURCE: document.getElementById('wiz-dhcp-source').value,
+    UNIFI_HOST: document.getElementById('wiz-unifi-host').value.trim(),
+    UNIFI_USER: document.getElementById('wiz-unifi-user').value.trim(),
+    UNIFI_SITE: document.getElementById('wiz-unifi-site').value.trim() || 'default',
+  };
+  const pw = document.getElementById('wiz-unifi-password').value;
+  if (pw) updates.UNIFI_PASSWORD = pw;
+  if (await saveEnv(updates, Object.keys(updates))) {
+    document.getElementById('wiz-unifi-password').value = '';
+    loadWizardStatus();
+  }
+}
+
+// --- Step 5: notifications ---
+async function saveWebhook() {
+  const url = document.getElementById('wiz-webhook-url').value.trim();
+  if (await saveEnv({NOTIFY_WEBHOOK_URL: url}, ['NOTIFY_WEBHOOK_URL'])) {
+    document.getElementById('wiz-webhook-url').value = '';
+    loadWizardStatus();
+  }
+}
+
+// --- Step 6: NetBox ---
+async function saveNetbox() {
+  const updates = {
+    NETBOX_URL: document.getElementById('wiz-netbox-url').value.trim(),
+    NETBOX_VERIFY_SSL: document.getElementById('wiz-netbox-verify-ssl').checked ? 'true' : 'false',
+  };
+  const token = document.getElementById('wiz-netbox-token').value;
+  if (token) updates.NETBOX_TOKEN = token;
+  if (await saveEnv(updates, Object.keys(updates))) {
+    document.getElementById('wiz-netbox-token').value = '';
+    loadWizardStatus();
+  }
+}
+
+// --- Step 7: admin login ---
+async function enableWizAuth() {
+  const password = document.getElementById('wiz-admin-login-password').value;
+  if (!password) { alert('Password required'); return; }
+  const r = await fetch('/api/auth/enable', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password}),
+  });
+  const d = await r.json();
+  if (!d.ok) { alert(d.error || 'Could not enable admin login'); return; }
+  document.getElementById('wiz-admin-login-password').value = '';
+  loadWizardStatus();
+}
+async function disableWizAuth() {
+  if (!confirm('Disable admin login?')) return;
+  await fetch('/api/auth/disable', {method: 'POST'});
+  loadWizardStatus();
+}
+
+loadWizardStatus();
+loadSshStatus();
+</script>
+{% endblock %}
