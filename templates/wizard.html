@@ -112,11 +112,11 @@
       <label>Pi-hole VIP</label>
       <input type="text" id="wiz-vip" placeholder="192.168.1.100">
     </div>
-    <button class="btn-primary" onclick="saveVip()">Save</button>
-    <div class="checkbox-row" style="margin-top:16px">
+    <div class="checkbox-row">
       <input type="checkbox" id="wiz-failover-enabled" onchange="toggleFailover(this.checked)">
       <label for="wiz-failover-enabled">Enable DHCP failover enforcement (takes effect immediately, no restart — but needs the VIP above set and the container restarted first)</label>
     </div>
+    <button class="btn-primary" onclick="saveVip()">Save</button>
   </div>
 
   <div class="section-title"><span class="step-num">4</span> External DHCP Source <span class="hint">(optional, UniFi only)</span></div>
