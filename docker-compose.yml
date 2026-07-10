@@ -3,7 +3,7 @@ services:
     image: 3amhomelab/pihole-fleet-manager:latest
     container_name: fleet-manager
     ports:
-      - "${APP_PORT}:8080"
+      - "${APP_PORT:-9490}:8080"
     volumes:
       - pihole_fleet_manager_data:/data
       # Bind-mounts this .env so the Setup tab can write a freshly generated

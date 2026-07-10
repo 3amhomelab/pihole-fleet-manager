@@ -24,11 +24,9 @@ from datetime import datetime
 
 import requests
 
-from workers import activity_log, maintenance, nodes
+from workers import activity_log, credentials, maintenance, nodes, pihole_api
 
-PIHOLE_PASS = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
 PIHOLE_VIP  = os.environ.get("PIHOLE_VIP", "").strip()
-SSH_USER    = os.environ.get("PIHOLE_SSH_USER", "root")
 SSH_KEY     = os.environ.get("PIHOLE_SSH_KEY", "/data/ssh/pihole_key")
 STATE_FILE  = os.environ.get("DHCP_FAILOVER_STATE_FILE", "/data/dhcp_failover.json")
 CHECK_INTERVAL_SECS = int(os.environ.get("DHCP_FAILOVER_CHECK_INTERVAL_SECS", "15"))
@@ -36,9 +34,6 @@ MAX_HISTORY = 20
 
 _SSH_OPTS = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no",
              "-o", "ConnectTimeout=8", "-o", "BatchMode=yes"]
-
-_sid_cache = {}
-_sid_lock  = threading.Lock()
 
 _status_lock = threading.Lock()
 _status = {"status": "idle", "message": "", "timestamp": None, "log": [],
@@ -95,7 +90,7 @@ def _detect_vip_master() -> str | None:
     for ip in nodes.get_ips():
         try:
             proc = subprocess.run(
-                ["ssh", *_SSH_OPTS, f"{SSH_USER}@{ip}", f"ip addr show | grep -q '{PIHOLE_VIP}/' && echo yes"],
+                ["ssh", *_SSH_OPTS, f"{credentials.get_ssh_user()}@{ip}", f"ip addr show | grep -q '{PIHOLE_VIP}/' && echo yes"],
                 capture_output=True, text=True, timeout=10,
             )
             if proc.returncode == 0 and "yes" in proc.stdout:
@@ -105,61 +100,17 @@ def _detect_vip_master() -> str | None:
     return None
 
 
-# --- Pi-hole v6 API ---
-
-def _auth(ip):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": PIHOLE_PASS}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        with _sid_lock:
-            _sid_cache[ip] = sid
-        return sid
-    except Exception:
-        return ""
-
+# --- Pi-hole v6 API (shared session cache — see pihole_api.py) ---
 
 def _set_dhcp_active(ip, active: bool) -> bool:
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return False
-        try:
-            r = requests.patch(f"http://{ip}/api/config", json={"config": {"dhcp": {"active": active}}},
-                                headers={"sid": sid}, timeout=15)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return True
-        except Exception:
-            return False
-    return False
+    return pihole_api.api_patch(ip, "/config", {"config": {"dhcp": {"active": active}}}) is not None
 
 
 def _get_dhcp_active(ip) -> bool | None:
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.get(f"http://{ip}/api/config/dhcp/active", headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return bool(r.json().get("config", {}).get("dhcp", {}).get("active"))
-        except Exception:
-            return None
-    return None
+    result = pihole_api.api_get(ip, "/config/dhcp/active")
+    if result is None:
+        return None
+    return bool(result.get("config", {}).get("dhcp", {}).get("active"))
 
 
 # --- Status ---

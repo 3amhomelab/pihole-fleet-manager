@@ -2,22 +2,29 @@
 """Getting Started wizard: one guided page covering the whole first-run
 setup, instead of hand-editing a long .env before the app is usable.
 
-Reuses each feature's own worker for anything that's already dynamic
-(node list, SSH trust, DHCP failover enable, admin login — all take effect
-immediately, no restart). Everything else in this app is still a plain
-env var read once at process start (PIHOLE_VIP, EXTERNAL_DHCP_SOURCE +
-UniFi creds, NOTIFY_WEBHOOK_URL, NETBOX_*) — this module's job is just
-writing those back to the stack's .env in one place, behind an explicit
-allowlist, so the wizard can't be used to inject an arbitrary env var."""
+Reuses each feature's own worker for anything that's already dynamic (node
+list, SSH trust, DHCP failover enable, admin login, and — as of the
+credentials.py module — the Pi-hole admin password and SSH user too, all of
+which take effect immediately, no restart). Everything else in this app is
+still a plain env var read once at process start (PIHOLE_VIP,
+EXTERNAL_DHCP_SOURCE + UniFi creds, NOTIFY_WEBHOOK_URL, NETBOX_*) — this
+module's job is just writing those back to the stack's .env in one place,
+behind an explicit allowlist, so the wizard can't be used to inject an
+arbitrary env var.
+
+The admin password and SSH user used to be in ENV_KEYS too (restart
+required), which broke the wizard's own very next step: SSH Trust would
+silently use whatever SSH user was active when the container last started,
+not the one just saved, because the module reading it had already cached
+the old env var at import time. See credentials.py."""
 import os
 
-from workers import host_env
+from workers import credentials, host_env
 
 # Every key here is read once from the environment at process start
 # elsewhere in this app — writing a new value takes effect only after the
 # container is restarted (see the wizard page's "restart required" banner).
 ENV_KEYS = {
-    "PIHOLE_ADMIN_PASSWORD", "PIHOLE_SSH_USER",
     "PIHOLE_VIP",
     "EXTERNAL_DHCP_SOURCE", "UNIFI_HOST", "UNIFI_USER", "UNIFI_PASSWORD", "UNIFI_SITE",
     "NOTIFY_WEBHOOK_URL",
@@ -26,13 +33,15 @@ ENV_KEYS = {
 
 
 def get_status() -> dict:
-    """Current values straight from this process's environment — reflects
-    what's actually active right now, not any not-yet-applied wizard edit
-    from earlier in the same session (that's tracked client-side until a
-    restart picks it up)."""
+    """Current values — for PIHOLE_VIP/external-DHCP/notify/NetBox this is
+    straight from this process's environment (reflects what's actually
+    active right now, not an unapplied wizard edit from earlier in the same
+    session — that's tracked client-side until a restart picks it up). SSH
+    user/admin password come from credentials.py instead, since those apply
+    immediately and this should show the current, real value."""
     return {
-        "pihole_ssh_user": os.environ.get("PIHOLE_SSH_USER", "root"),
-        "pihole_admin_password_set": bool(os.environ.get("PIHOLE_ADMIN_PASSWORD")),
+        "pihole_ssh_user": credentials.get_ssh_user(),
+        "pihole_admin_password_set": bool(credentials.get_admin_password()),
         "pihole_vip": os.environ.get("PIHOLE_VIP", ""),
         "external_dhcp_source": os.environ.get("EXTERNAL_DHCP_SOURCE", ""),
         "unifi_host": os.environ.get("UNIFI_HOST", ""),

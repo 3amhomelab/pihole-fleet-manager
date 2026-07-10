@@ -20,16 +20,13 @@ from datetime import datetime, timedelta, time as dtime, timezone
 
 import requests
 
-from workers import activity_log, backup, maintenance, nodes, notify
+from workers import activity_log, backup, maintenance, nodes, notify, pihole_api
 
-PIHOLE_PASS      = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
 GRAVITY_HOUR     = int(os.environ.get("GRAVITY_UPDATE_HOUR", "4"))  # UTC hour; offset from PIHOLE_UPDATER_HOUR (3) on purpose
 DROP_THRESHOLD_PCT = float(os.environ.get("GRAVITY_DROP_THRESHOLD_PERCENT", "10"))
 STATE_FILE       = os.environ.get("GRAVITY_STATE_FILE", "/data/gravity_state.json")
 MAX_HISTORY      = 30
 
-_sid_cache  = {}
-_sid_lock   = threading.Lock()
 _state_lock = threading.Lock()
 _node_state = {}   # ip -> {last_domain_count, last_run, history: [...]}
 _running    = {}   # ip -> bool
@@ -40,56 +37,24 @@ def _now_iso():
     return datetime.now().isoformat()
 
 
-# --- Pi-hole v6 API ---
-
-def _auth(ip):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": PIHOLE_PASS}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        with _sid_lock:
-            _sid_cache[ip] = sid
-        return sid
-    except Exception:
-        return ""
-
-
-def _api_get(ip, path):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.get(f"http://{ip}/api{path}", headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
-
+# --- Pi-hole v6 API (shared session cache — see pihole_api.py) ---
 
 def _api_post_gravity(ip):
-    """Blocking — Pi-hole streams gravity's log as the response body and only
-    returns once the update actually finishes, so this needs a generous timeout."""
+    """Blocking — Pi-hole streams gravity's log as the response body (plain
+    text, not JSON) and only returns once the update actually finishes, so
+    this needs a generous timeout and its own request rather than the
+    shared pihole_api.api_post (which assumes a JSON response)."""
     for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
+        with pihole_api._sid_lock:
+            sid = pihole_api._sid_cache.get(ip, "")
         if not sid:
-            sid = _auth(ip)
+            sid = pihole_api.auth(ip)
         if not sid:
             return None
         try:
             r = requests.post(f"http://{ip}/api/action/gravity", headers={"sid": sid}, timeout=300)
             if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
+                pihole_api.invalidate(ip)
                 continue
             r.raise_for_status()
             return r.text
@@ -99,7 +64,7 @@ def _api_post_gravity(ip):
 
 
 def _domain_count(ip) -> int | None:
-    lists = _api_get(ip, "/lists")
+    lists = pihole_api.api_get(ip, "/lists")
     if lists is None:
         return None
     return sum(l.get("number") or 0 for l in lists.get("lists", []) if l.get("type") == "block" and l.get("enabled"))

@@ -27,7 +27,7 @@ from datetime import datetime
 
 import requests
 
-from workers import activity_log, nodes
+from workers import activity_log, nodes, pihole_api
 
 SOURCE_KIND   = os.environ.get("EXTERNAL_DHCP_SOURCE", "").strip().lower()  # "" (disabled) or "unifi"
 POLL_SECS     = int(os.environ.get("EXTERNAL_DHCP_POLL_SECS", "300"))
@@ -37,11 +37,6 @@ UNIFI_HOST     = os.environ.get("UNIFI_HOST", "").strip()
 UNIFI_USER     = os.environ.get("UNIFI_USER", "").strip()
 UNIFI_PASSWORD = os.environ.get("UNIFI_PASSWORD", "")
 UNIFI_SITE     = os.environ.get("UNIFI_SITE", "default").strip()
-
-PIHOLE_PASS = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
-
-_pihole_sid_cache = {}
-_pihole_sid_lock  = threading.Lock()
 
 _status_lock = threading.Lock()
 _status = {"status": "idle", "message": "", "timestamp": None, "clients_found": 0}
@@ -143,44 +138,7 @@ def merge(current_hosts: list, clients: list, previously_published: set) -> tupl
     return kept + fresh, {c["ip"] for c in clients if _valid_ip(c["ip"])}
 
 
-# --- Pi-hole push ---
-
-def _auth_pihole(ip):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": PIHOLE_PASS}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        with _pihole_sid_lock:
-            _pihole_sid_cache[ip] = sid
-        return sid
-    except Exception:
-        return ""
-
-
-def _pihole_api_get(ip, path):
-    with _pihole_sid_lock:
-        sid = _pihole_sid_cache.get(ip, "") or _auth_pihole(ip)
-    if not sid:
-        return None
-    try:
-        r = requests.get(f"http://{ip}/api{path}", headers={"sid": sid}, timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return None
-
-
-def _pihole_api_patch(ip, path, body):
-    with _pihole_sid_lock:
-        sid = _pihole_sid_cache.get(ip, "") or _auth_pihole(ip)
-    if not sid:
-        return None
-    try:
-        r = requests.patch(f"http://{ip}/api{path}", json=body, headers={"sid": sid}, timeout=15)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return None
+# --- Pi-hole push (shared session cache — see pihole_api.py) ---
 
 
 def sync_now() -> tuple:
@@ -196,13 +154,13 @@ def sync_now() -> tuple:
     newly_published = {c["ip"] for c in clients if _valid_ip(c["ip"])}
     failed = []
     for ip in nodes.get_ips():
-        current = _pihole_api_get(ip, "/config/dns/hosts")
+        current = pihole_api.api_get(ip, "/config/dns/hosts")
         if current is None:
             failed.append(ip)
             continue
         existing = current.get("config", {}).get("dns", {}).get("hosts", [])
         merged, _ = merge(existing, clients, previously_published)
-        if _pihole_api_patch(ip, "/config", {"config": {"dns": {"hosts": merged}}}) is None:
+        if pihole_api.api_patch(ip, "/config", {"config": {"dns": {"hosts": merged}}}) is None:
             failed.append(ip)
 
     _save_previous_ips(newly_published)

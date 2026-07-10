@@ -10,13 +10,9 @@ import threading
 from collections import deque
 from datetime import datetime
 
-import requests
-
-from workers import activity_log, hostnames, nodes, primary_dhcp, store, validate
+from workers import activity_log, credentials, hostnames, nodes, pihole_api, primary_dhcp, store, validate
 
 # --- Config ---
-PIHOLE_PASS  = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
-SSH_USER     = os.environ.get("PIHOLE_SSH_USER", "root")
 SSH_KEY      = os.environ.get("PIHOLE_SSH_KEY", "/root/.ssh/pihole_key")
 CONF_NAME    = os.environ.get("DNSMASQ_CONF_NAME", "10-vlans.conf")
 CONF_PATH    = f"/etc/dnsmasq.d/{CONF_NAME}"
@@ -25,93 +21,13 @@ MANAGED_TAG  = "# managed by Pihole Fleet Manager — do not edit by hand"
 _SSH_OPTS = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no",
              "-o", "ConnectTimeout=15", "-o", "BatchMode=yes"]
 
-_sid_cache  = {}
-_sid_lock   = threading.Lock()
-
 _status_lock = threading.Lock()
 _status = {"status": "idle", "message": "", "timestamp": None, "log": []}
 _event  = threading.Event()
 
 
-# --- Pi-hole v6 API (just enough to flip one config flag) ---
-
-def _auth(ip):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": PIHOLE_PASS}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        with _sid_lock:
-            _sid_cache[ip] = sid
-        return sid
-    except Exception:
-        return ""
-
-
-def _api_get(ip, path):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.get(f"http://{ip}/api{path}", headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
-
-
-def _api_patch(ip, path, body):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.patch(f"http://{ip}/api{path}", json=body, headers={"sid": sid}, timeout=15)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
-
-
-def _api_post(ip, path, body):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.post(f"http://{ip}/api{path}", json=body, headers={"sid": sid}, timeout=15)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
-
-
 def _enable_etc_dnsmasq_d(ip) -> bool:
-    result = _api_patch(ip, "/config", {"config": {"misc": {"etc_dnsmasq_d": True}}})
+    result = pihole_api.api_patch(ip, "/config", {"config": {"misc": {"etc_dnsmasq_d": True}}})
     return result is not None
 
 
@@ -136,7 +52,7 @@ def _sync_vlan_groups(ip: str, vlans: list, hosts_by_vlan: dict) -> list:
     if not managed:
         return []
 
-    groups_resp = _api_get(ip, "/groups")
+    groups_resp = pihole_api.api_get(ip, "/groups")
     if groups_resp is None:
         return [f"{ip}: could not read groups to assign VLAN clients"]
     name_to_id = {g["name"]: g["id"] for g in groups_resp.get("groups", [])}
@@ -151,7 +67,7 @@ def _sync_vlan_groups(ip: str, vlans: list, hosts_by_vlan: dict) -> list:
             mac = h.get("mac")
             if not mac:
                 continue
-            if _api_post(ip, "/clients", {"client": mac, "groups": [gid]}) is None:
+            if pihole_api.api_post(ip, "/clients", {"client": mac, "groups": [gid]}) is None:
                 warnings.append(f"{ip}: failed to assign {mac} to group '{v['group_name']}'")
     return warnings
 
@@ -159,14 +75,14 @@ def _sync_vlan_groups(ip: str, vlans: list, hosts_by_vlan: dict) -> list:
 def _sync_hostnames(ip, vlans) -> tuple:
     """Read this node's current dns.hosts, merge in the VLAN-derived entries,
     and push back only if something actually changed."""
-    current = _api_get(ip, "/config/dns/hosts")
+    current = pihole_api.api_get(ip, "/config/dns/hosts")
     if current is None:
         return False, "could not read current dns.hosts"
     existing = current.get("config", {}).get("dns", {}).get("hosts", [])
     merged = hostnames.merge(existing, vlans)
     if sorted(merged) == sorted(existing):
         return True, None
-    result = _api_patch(ip, "/config", {"config": {"dns": {"hosts": merged}}})
+    result = pihole_api.api_patch(ip, "/config", {"config": {"dns": {"hosts": merged}}})
     return result is not None, None if result is not None else "could not write dns.hosts"
 
 
@@ -211,7 +127,7 @@ def fetch_remote_conf(ip: str) -> tuple:
     """Read-only — cats back whatever's currently at CONF_PATH on a node."""
     try:
         proc = subprocess.run(
-            ["ssh", *_SSH_OPTS, f"{SSH_USER}@{ip}", f"cat {CONF_PATH} 2>/dev/null"],
+            ["ssh", *_SSH_OPTS, f"{credentials.get_ssh_user()}@{ip}", f"cat {CONF_PATH} 2>/dev/null"],
             capture_output=True, text=True, timeout=15,
         )
         if proc.returncode != 0:
@@ -270,7 +186,7 @@ def _ssh_write_file(ip: str, content: str) -> tuple:
     # is root or a non-root account with sudo access — sudo is a no-op for root.
     try:
         proc = subprocess.run(
-            ["ssh", *_SSH_OPTS, f"{SSH_USER}@{ip}",
+            ["ssh", *_SSH_OPTS, f"{credentials.get_ssh_user()}@{ip}",
              f"sudo tee {CONF_PATH} > /dev/null && sudo chmod 644 {CONF_PATH}"],
             input=content, capture_output=True, text=True, timeout=20,
         )
@@ -284,7 +200,7 @@ def _ssh_write_file(ip: str, content: str) -> tuple:
 def _ssh_reload_dns(ip: str) -> tuple:
     try:
         proc = subprocess.run(
-            ["ssh", *_SSH_OPTS, f"{SSH_USER}@{ip}", "sudo pihole restartdns"],
+            ["ssh", *_SSH_OPTS, f"{credentials.get_ssh_user()}@{ip}", "sudo pihole restartdns"],
             capture_output=True, text=True, timeout=30,
         )
         if proc.returncode != 0:

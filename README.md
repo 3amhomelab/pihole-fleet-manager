@@ -150,9 +150,9 @@ replication across nodes, scheduled software updates, and activity logging.
 - **UI-managed node list** (Setup tab) — add/remove Pi-hole nodes from the
   fleet without a container recreate; `PIHOLE_IPS` only seeds the list once
   on first boot, after which the UI is authoritative.
-- **Optional admin login** (Setup tab) — off by default; when enabled,
-  requires a password (session-based) for every page and API call. See
-  [Security](#security) below.
+- **Admin login** (Setup tab) — on by default, but inert until you set a
+  password; once set, requires it (session-based) for every page and API
+  call. See [Security](#security) below.
 
 ## Configuration
 
@@ -189,7 +189,7 @@ config file to edit.
 | `MONITOR_REBOOT_AFTER_MINUTES` | `10` | Minutes between SSH reboot retries |
 | `MONITOR_UPTIME_INTERVAL` | `300` | Seconds between uptime refresh + VIP master re-detection |
 | `MONITOR_MAX_DIAG_REPORTS` | `3` | Saved diagnostics reports kept per node (oldest pruned automatically) |
-| `ADMIN_PASSWORD` | *(optional)* | Enables admin login when set — normally written automatically by the Setup tab's switch, not hand-edited |
+| `ADMIN_PASSWORD` | *(optional)* | Plaintext fallback for pre-seeding a fresh deploy only — once set via the Setup tab's switch, the password lives as a hash in `/data`, not here |
 | `NOTIFY_WEBHOOK_URL` | *(optional)* | Generic webhook for node-down/gravity-drop/upgrade-failure/drift-check alerts; blank disables notifications entirely |
 | `UPDATER_POST_UPGRADE_WAIT_SECS` | `90` | Seconds to wait after an upgrade+reboot before running the post-upgrade health check |
 | `NETBOX_URL` / `NETBOX_TOKEN` | *(optional)* | NetBox base URL + API token for the Setup tab's VLAN/host import; blank disables it entirely |
@@ -272,14 +272,17 @@ pre-installed on the targets.
 
 ## Security
 
-Admin login is **off by default** — every page and `/api/...` endpoint
-(including DHCP/DNS config pushes to your Pi-hole nodes) is open to anyone
-who can reach the container unless you turn it on. Enable it from the Setup
-tab's "Admin Login" switch: it prompts for a password once, then requires
+Admin login is **on by default**, but inert until a password is actually
+set — a fresh install with no password configured yet redirects every page
+to the Getting Started wizard rather than silently running unprotected
+forever. Set a password from the Setup tab's "Admin Login" switch (or the
+wizard's own step for it): it prompts for a password once, then requires
 that password (session-based — log in once per browser) for everything
 except `/login` itself and `/api/known-hosts` (deliberately exempted so
 other apps, e.g. Network-Health, can keep polling it for Pi-hole DHCP
-awareness without a session).
+awareness without a session). The password is stored as a salted hash in
+the `/data` volume, never in `.env` or in plaintext anywhere. Existing
+deployments that had already turned login off keep that choice.
 
 This app is still designed to run on a trusted internal network, not to be
 exposed to the internet — admin login is meant to stop casual access on a
@@ -311,7 +314,7 @@ workers/
   netbox_import.py    Read-only VLAN/host import from NetBox
   query_log.py         Fleet-wide query log search
   maintenance.py       Per-node maintenance mode (pauses other workers)
-  auth.py              Optional admin login gate
+  auth.py              Admin login gate (on by default, inert until a password is set)
   notify.py            Generic outbound webhook
   setup.py             SSH trust bootstrap
   activity_log.py      Unified event log

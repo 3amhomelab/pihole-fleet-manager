@@ -14,9 +14,8 @@ import subprocess
 import threading
 from datetime import datetime
 
-from workers import activity_log, host_env, nodes
+from workers import activity_log, credentials, host_env, nodes
 
-SSH_USER    = os.environ.get("PIHOLE_SSH_USER", "root")
 KEY_PATH    = os.environ.get("PIHOLE_SSH_KEY", "/data/ssh/pihole_key")
 
 _SSH_OPTS = ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=15"]
@@ -65,7 +64,7 @@ def test_key_auth(ip: str) -> bool:
     try:
         proc = subprocess.run(
             ["ssh", "-i", KEY_PATH, *_SSH_OPTS, "-o", "BatchMode=yes",
-             f"{SSH_USER}@{ip}", "sudo -n true && echo ok"],
+             f"{credentials.get_ssh_user()}@{ip}", "sudo -n true && echo ok"],
             capture_output=True, text=True, timeout=15,
         )
         return proc.returncode == 0 and "ok" in proc.stdout
@@ -108,7 +107,7 @@ def _distribute_key(ip: str, password: str, pubkey: str) -> tuple:
         proc = subprocess.run(
             ["sshpass", "-p", password, "ssh", *_SSH_OPTS,
              "-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no",
-             f"{SSH_USER}@{ip}", remote_cmd],
+             f"{credentials.get_ssh_user()}@{ip}", remote_cmd],
             input=pubkey, capture_output=True, text=True, timeout=20,
         )
         if proc.returncode != 0:

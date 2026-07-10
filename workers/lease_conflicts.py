@@ -8,71 +8,7 @@ Polls every node's own active leases directly (rather than reusing
 primary_dhcp.get_leases, which merges across nodes and discards which node a
 lease actually came from) so a detected conflict can be cleared on the exact
 node it's stale on."""
-import os
-import threading
-
-import requests
-
-from workers import activity_log, nodes, primary_dhcp, store
-
-PIHOLE_PASS = os.environ.get("PIHOLE_ADMIN_PASSWORD", "")
-
-_sid_cache = {}
-_sid_lock  = threading.Lock()
-
-
-def _auth(ip):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": PIHOLE_PASS}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        with _sid_lock:
-            _sid_cache[ip] = sid
-        return sid
-    except Exception:
-        return ""
-
-
-def _api_get(ip, path):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.get(f"http://{ip}/api{path}", headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
-
-
-def _api_delete(ip, path) -> bool:
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return False
-        try:
-            r = requests.delete(f"http://{ip}/api{path}", headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            # 404 means the lease is already gone — that's the desired end state too
-            return r.status_code in (200, 204, 404)
-        except Exception:
-            return False
-    return False
+from workers import activity_log, nodes, pihole_api, primary_dhcp, store
 
 
 def _all_reservations() -> dict:
@@ -99,7 +35,7 @@ def check_conflicts() -> list:
 
     conflicts = []
     for ip in nodes.get_ips():
-        leases = _api_get(ip, "/dhcp/leases")
+        leases = pihole_api.api_get(ip, "/dhcp/leases")
         if leases is None:
             continue
         for lease in leases.get("leases", []):
@@ -118,7 +54,7 @@ def clear_conflict(node: str, leased_ip: str) -> tuple:
     reservation actually takes effect on the client's next renewal."""
     if node not in nodes.get_ips():
         return False, "Unknown node"
-    if not _api_delete(node, f"/dhcp/leases/{leased_ip}"):
+    if not pihole_api.api_delete(node, f"/dhcp/leases/{leased_ip}", ok_statuses=(200, 204, 404)):
         return False, "Could not clear lease via API"
     activity_log.log("dhcp", f"Cleared stale lease {leased_ip} on {node}")
     return True, None
