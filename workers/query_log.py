@@ -4,48 +4,9 @@ node's own /api/queries and merges the results, tagged with which node
 answered. Pi-hole's own dashboard only ever shows one node's query log —
 with a VIP in front of the cluster, "why was this domain blocked" requires
 checking every node's dashboard by hand without this."""
-import os
 import threading
 
-import requests
-
-from workers import credentials, nodes
-
-_sid_cache = {}
-_sid_lock  = threading.Lock()
-
-
-def _auth(ip):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": credentials.get_admin_password()}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        with _sid_lock:
-            _sid_cache[ip] = sid
-        return sid
-    except Exception:
-        return ""
-
-
-def _api_get(ip, path, params):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.get(f"http://{ip}/api{path}", params=params, headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
+from workers import nodes, pihole_api
 
 
 def _query_one(ip: str, domain: str, client: str, limit: int) -> dict:
@@ -54,7 +15,7 @@ def _query_one(ip: str, domain: str, client: str, limit: int) -> dict:
         params["domain"] = domain if "*" in domain else f"*{domain}*"
     if client:
         params["client_ip"] = client
-    resp = _api_get(ip, "/queries", params)
+    resp = pihole_api.api_get(ip, "/queries", params)
     if resp is None:
         return {"ok": False, "queries": []}
     queries = resp.get("queries", [])

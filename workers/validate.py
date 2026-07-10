@@ -4,9 +4,7 @@ before they get propagated to every node at once — rather than trusting that
 whatever's in the store/API right now is safe to fan out."""
 import ipaddress
 
-import requests
-
-from workers import store
+from workers import pihole_api, store
 
 
 # --- DHCP scope validation (gate before pihole_push writes dnsmasq.d) ---
@@ -56,42 +54,11 @@ def validate_vlans(vlans: list) -> list:
 # an empty/disabled default group silently stops all blocking on a node,
 # with nothing in the UI calling it out.
 
-_sid_cache = {}
-
-
-def _auth(ip, password):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": password}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        _sid_cache[ip] = sid
-        return sid
-    except Exception:
-        return ""
-
-
-def _api_get(ip, path, password):
-    for attempt in range(2):
-        sid = _sid_cache.get(ip, "") or _auth(ip, password)
-        if not sid:
-            return None
-        try:
-            r = requests.get(f"http://{ip}/api{path}", headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
-
-
-def check_node_group_health(ip: str, password: str) -> list:
+def check_node_group_health(ip: str) -> list:
     """Returns a list of warning strings for this node (empty = healthy)."""
     warnings = []
 
-    groups = _api_get(ip, "/groups", password)
+    groups = pihole_api.api_get(ip, "/groups")
     if groups is None:
         return [f"{ip}: could not reach API to check group health"]
     default_group = next((g for g in groups.get("groups", []) if g.get("id") == 0), None)
@@ -100,7 +67,7 @@ def check_node_group_health(ip: str, password: str) -> list:
     elif not default_group.get("enabled", True):
         warnings.append(f"{ip}: default group is disabled — blocking is silently off for any client without another group")
 
-    lists = _api_get(ip, "/lists", password)
+    lists = pihole_api.api_get(ip, "/lists")
     if lists is None:
         warnings.append(f"{ip}: could not reach API to check adlists")
     else:

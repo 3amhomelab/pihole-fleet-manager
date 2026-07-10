@@ -16,7 +16,7 @@ from datetime import datetime
 
 import requests
 
-from workers import activity_log, credentials, maintenance, nodes, notify
+from workers import activity_log, credentials, maintenance, nodes, notify, pihole_api
 
 # --- Config ---
 # VIP: monitored for health but never auto-rebooted (it's a virtual IP, not a node)
@@ -54,9 +54,6 @@ _reboot_exhausted     = set()  # ip -> all retries used, left down (logged once)
 
 _failure_log      = []
 _failure_log_lock = threading.Lock()
-
-_pihole_lock = threading.Lock()
-_pihole_sid  = {}
 
 _vip_master      = ""
 _vip_master_lock = threading.Lock()
@@ -192,10 +189,10 @@ def _quorum_ok(failing_ip: str) -> bool:
 def _fetch_node_stats(ip) -> dict:
     """Blocking status + query stats from Pi-hole v6 API (authenticated)."""
     result = {}
-    blocking = _api_get(ip, "/dns/blocking")
+    blocking = pihole_api.api_get(ip, "/dns/blocking")
     if blocking is not None:
         result["blocking"] = blocking.get("blocking") == "enabled"
-    summary = _api_get(ip, "/stats/summary")
+    summary = pihole_api.api_get(ip, "/stats/summary")
     if summary is not None:
         q = summary.get("queries", {})
         result["stats"] = {
@@ -362,41 +359,7 @@ def _monitor_loop():
         time.sleep(interval)
 
 
-# --- Pi-hole v6 API (session auth, used for stats + VIP master probing) ---
-
-def _auth(ip):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": credentials.get_admin_password()}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        with _pihole_lock:
-            _pihole_sid[ip] = sid
-        return sid
-    except Exception as e:
-        print(f"[monitor] auth to {ip} failed: {e}")
-        return ""
-
-
-def _api_get(ip, path):
-    for attempt in range(2):
-        with _pihole_lock:
-            sid = _pihole_sid.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.get(f"http://{ip}/api{path}", headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                with _pihole_lock:
-                    _pihole_sid.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"[monitor] GET {path} from {ip} failed: {e}")
-            return None
-    return None
+# --- Pi-hole v6 API (shared session cache — see pihole_api.py) ---
 
 
 def _set_vip_master(ip: str, method: str) -> None:

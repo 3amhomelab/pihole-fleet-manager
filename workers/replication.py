@@ -20,9 +20,7 @@ import urllib.parse
 from collections import deque
 from datetime import datetime
 
-import requests
-
-from workers import activity_log, credentials, gravity, maintenance, nodes, validate
+from workers import activity_log, gravity, maintenance, nodes, pihole_api, validate
 
 OPTIONS_FILE    = os.environ.get("REPLICATION_OPTIONS_FILE", "/data/replication.json")
 AUTO_FILE       = os.environ.get("REPLICATION_AUTO_FILE", "/data/replication_auto.json")
@@ -101,9 +99,6 @@ GROUPS = [
              "update on any node it changes.",
      "paths": [DOMAINS_PATH], "default": False},
 ]
-
-_sid_cache = {}
-_sid_lock  = threading.Lock()
 
 _status = {"status": "idle", "message": "", "timestamp": None, "log": []}
 _status_lock = threading.Lock()
@@ -268,102 +263,16 @@ def _pick_winner(nodes: list, node_values: dict, ledger_entry: dict, now_iso: st
     return winner_entry, updated, stale
 
 
-# --- Pi-hole v6 API ---
-
-def _auth(ip):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": credentials.get_admin_password()}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        with _sid_lock:
-            _sid_cache[ip] = sid
-        return sid
-    except Exception:
-        return ""
-
-
-def _api_get(ip, path):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.get(f"http://{ip}/api{path}", headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
-
-
-def _api_patch(ip, path, body):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.patch(f"http://{ip}/api{path}", json=body, headers={"sid": sid}, timeout=15)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
-
-
-def _api_post(ip, path, body):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.post(f"http://{ip}/api{path}", json=body, headers={"sid": sid}, timeout=15)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
-
-
-def _api_put(ip, path, body):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.put(f"http://{ip}/api{path}", json=body, headers={"sid": sid}, timeout=15)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
+# --- Pi-hole v6 API (shared session cache — see pihole_api.py) ---
+# Thin aliases, not just a straight `from workers.pihole_api import api_get
+# as _api_get`: backup.py/recovery.py already call these as
+# replication._api_get/_api_patch/etc. directly (borrowing this module's
+# helpers rather than re-importing pihole_api themselves), so keeping the
+# same names here means neither needed to change.
+_api_get   = pihole_api.api_get
+_api_patch = pihole_api.api_patch
+_api_post  = pihole_api.api_post
+_api_put   = pihole_api.api_put
 
 
 # --- Path helpers ---
@@ -678,7 +587,7 @@ def _merge_run(step) -> list:
     step("Checking default-group/blocklist health on each node")
     health_warnings = []
     for ip in nodes:
-        health_warnings.extend(validate.check_node_group_health(ip, credentials.get_admin_password()))
+        health_warnings.extend(validate.check_node_group_health(ip))
     if health_warnings:
         step("Health warning(s): " + "; ".join(health_warnings))
         activity_log.log("replication", f"Node health check found issue(s): {'; '.join(health_warnings)}", level="warning")

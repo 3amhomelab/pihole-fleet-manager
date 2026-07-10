@@ -10,48 +10,7 @@ API has no cheap way to get that) — a domain that's #11 on every node but
 never makes any node's own top-10 won't show up here even if its true
 fleet-wide total would rank higher. Good enough for "what's dominating right
 now," not a source of truth for long-tail analysis."""
-import os
-import threading
-
-import requests
-
-from workers import credentials, nodes
-
-_sid_cache = {}
-_sid_lock  = threading.Lock()
-
-
-def _auth(ip):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": credentials.get_admin_password()}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        with _sid_lock:
-            _sid_cache[ip] = sid
-        return sid
-    except Exception:
-        return ""
-
-
-def _api_get(ip, path):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.get(f"http://{ip}/api{path}", headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
+from workers import nodes, pihole_api
 
 
 def _merge_domain_counts(per_node, key, top_count):
@@ -79,11 +38,11 @@ def get_fleet_stats(top_count: int = 10) -> dict:
     ips = nodes.get_ips()
     per_node = {}
     for ip in ips:
-        summary = _api_get(ip, "/stats/summary")
-        domains = _api_get(ip, f"/stats/top_domains?count={top_count}")
-        clients = _api_get(ip, f"/stats/top_clients?count={top_count}")
-        denied_domains = _api_get(ip, f"/stats/top_domains?count={top_count}&blocked=true")
-        denied_clients = _api_get(ip, f"/stats/top_clients?count={top_count}&blocked=true")
+        summary = pihole_api.api_get(ip, "/stats/summary")
+        domains = pihole_api.api_get(ip, f"/stats/top_domains?count={top_count}")
+        clients = pihole_api.api_get(ip, f"/stats/top_clients?count={top_count}")
+        denied_domains = pihole_api.api_get(ip, f"/stats/top_domains?count={top_count}&blocked=true")
+        denied_clients = pihole_api.api_get(ip, f"/stats/top_clients?count={top_count}&blocked=true")
         reachable = summary is not None
         per_node[ip] = {
             "reachable": reachable,

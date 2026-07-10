@@ -12,9 +12,7 @@ import threading
 import time
 from datetime import datetime, timedelta, time as dtime, timezone
 
-import requests
-
-from workers import activity_log, backup, credentials, maintenance, monitor, nodes, notify
+from workers import activity_log, backup, credentials, maintenance, monitor, nodes, notify, pihole_api
 
 SSH_KEY         = os.environ.get("PIHOLE_SSH_KEY", "/data/ssh/pihole_key")
 UPDATER_HOUR    = int(os.environ.get("PIHOLE_UPDATER_HOUR", "3"))     # UTC hour
@@ -26,8 +24,6 @@ MAX_HISTORY     = 30
 _SSH_OPTS = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no",
              "-o", "ConnectTimeout=15", "-o", "BatchMode=yes"]
 
-_sid_cache  = {}
-_sid_lock   = threading.Lock()
 _state_lock = threading.Lock()
 _node_state = {}       # ip -> {version_current, version_latest, version_update_available, last_upgraded, history: [...]}
 _upgrade_running = {}  # ip -> bool
@@ -39,44 +35,11 @@ def _now_iso():
     return datetime.now().isoformat()
 
 
-# --- Pi-hole v6 API ---
-
-def _auth(ip):
-    try:
-        r = requests.post(f"http://{ip}/api/auth", json={"password": credentials.get_admin_password()}, timeout=8)
-        r.raise_for_status()
-        sid = r.json().get("session", {}).get("sid", "")
-        with _sid_lock:
-            _sid_cache[ip] = sid
-        return sid
-    except Exception:
-        return ""
-
-
-def _api_get(ip, path):
-    for attempt in range(2):
-        with _sid_lock:
-            sid = _sid_cache.get(ip, "")
-        if not sid:
-            sid = _auth(ip)
-        if not sid:
-            return None
-        try:
-            r = requests.get(f"http://{ip}/api{path}", headers={"sid": sid}, timeout=10)
-            if r.status_code == 401 and attempt == 0:
-                with _sid_lock:
-                    _sid_cache.pop(ip, None)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            return None
-    return None
-
+# --- Pi-hole v6 API (shared session cache — see pihole_api.py) ---
 
 def _get_version(ip) -> dict:
     """Fetch Pi-hole core version from /info/version."""
-    data = _api_get(ip, "/info/version")
+    data = pihole_api.api_get(ip, "/info/version")
     if not data:
         return {}
     core    = data.get("version", {}).get("core", {})
