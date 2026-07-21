@@ -181,7 +181,7 @@ def api_list_vlans():
     for v in vlans:
         static_hosts = primary_dhcp.get_reservations() if v.get("is_primary") else v["hosts"]
         v["hosts"] = store.merge_dynamic_hosts(v, static_hosts, leases)
-    return jsonify({"vlans": vlans})
+    return jsonify({"vlans": vlans, "wireless_migration_enabled": wireless_migration.is_enabled()})
 
 
 @app.route("/api/vlans", methods=["POST"])
@@ -577,6 +577,14 @@ def api_failover_state():
 def api_failover_set_enabled():
     data = request.get_json(silent=True) or {}
     return jsonify(dhcp_failover.set_enabled(bool(data.get("enabled"))))
+
+
+# --- Wireless VLAN auto-migration (temporary, migration-period only) ---
+
+@app.route("/api/wireless-migration/enabled", methods=["POST"])
+def api_wireless_migration_set_enabled():
+    data = request.get_json(silent=True) or {}
+    return jsonify(wireless_migration.set_enabled(bool(data.get("enabled"))))
 
 
 # --- Node health monitoring (ping/DNS/API checks, uptime, VIP master, auto-heal) ---

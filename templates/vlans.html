@@ -84,6 +84,15 @@ td.ip span:hover, td.mac span:hover { border-bottom-color:currentColor; }
 .edit-save   { background:var(--blue);border:none;color:#fff;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-left:4px; }
 .edit-cancel { background:none;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-left:2px; }
 .edit-err    { color:var(--red);font-size:10px;margin-left:6px;display:block;margin-top:3px; }
+
+/* Migration toggle */
+.migration-row { display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border); }
+.toggle-switch { position:relative;width:38px;height:22px;flex-shrink:0; }
+.toggle-switch input { opacity:0;width:0;height:0; }
+.toggle-slider { position:absolute;inset:0;background:var(--border);border-radius:999px;cursor:pointer;transition:.15s; }
+.toggle-slider::before { content:'';position:absolute;width:16px;height:16px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.15s; }
+input:checked + .toggle-slider { background:var(--blue); }
+input:checked + .toggle-slider::before { transform:translateX(16px); }
 </style>
 {% endblock %}
 
@@ -156,6 +165,7 @@ td.ip span:hover, td.mac span:hover { border-bottom-color:currentColor; }
 let allVlans = [];
 let openVlan = null;
 let hostSortAsc = true;
+let wirelessMigrationEnabled = true;
 
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function ipNum(ip) { return (ip||'').split('.').reduce((a,o)=>a*256+parseInt(o||0,10), 0); }
@@ -165,6 +175,7 @@ async function loadVlans() {
   const r = await fetch('/api/vlans');
   const d = await r.json();
   allVlans = d.vlans || [];
+  wirelessMigrationEnabled = d.wireless_migration_enabled !== false;
   renderVlans();
 }
 
@@ -241,6 +252,15 @@ function renderVlans() {
         ${isPrimary ? `
         <p class="hint" style="margin-top:22px">Changes here are kept in sync across all Pi-holes automatically —
         see the <a href="/replication" style="color:var(--blue)">Replication</a> tab.</p>` : ''}
+        ${v.id === 'wireless' ? `
+        <div class="migration-row">
+          <label class="toggle-switch">
+            <input type="checkbox" id="migration-toggle" ${wirelessMigrationEnabled ? 'checked' : ''} onchange="setMigrationEnabled(this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+          <span style="font-size:12px;color:var(--muted)">Auto-migrate matching devices from Primary here as they connect
+          — temporary, will be removed once migration is complete</span>
+        </div>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -259,6 +279,11 @@ function netmaskOf(v) {
 function toggleVlan(id) {
   openVlan = openVlan === id ? null : id;
   renderVlans();
+}
+
+async function setMigrationEnabled(enabled) {
+  wirelessMigrationEnabled = enabled;
+  await fetch('/api/wireless-migration/enabled', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled})});
 }
 
 async function createVlan() {

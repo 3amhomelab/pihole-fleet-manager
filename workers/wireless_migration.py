@@ -10,13 +10,60 @@ a new wireless-scope reservation at the same host/third/fourth octets, just
 under 10.1.x.x instead of 10.0.x.x (mirroring the mapping already used when
 the wireless VLAN's own scope was first carved out). This lets static IPs
 be migrated to the new VLAN gradually, one device at a time, as each
-physically moves onto that network, rather than all at once."""
+physically moves onto that network, rather than all at once.
+
+This is a stopgap for the migration period only — meant to be deleted along
+with its toggle once every device has moved over — so it's gated behind an
+on/off switch (defaulting to on, matching the always-on behavior before the
+switch existed) rather than left as an invisible always-running background
+job with no way to turn it off short of a redeploy."""
+import json
+import os
 import threading
 
 from workers import activity_log, pihole_push, primary_dhcp, store
 
 CHECK_INTERVAL_SECS = 60
 WIRELESS_VLAN_ID = "wireless"
+STATE_FILE = os.environ.get("WIRELESS_MIGRATION_STATE_FILE", "/data/wireless_migration.json")
+
+_lock = threading.Lock()
+
+
+# --- Enabled/disabled toggle (persisted) ---
+
+def _load_state() -> dict:
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE) as f:
+                data = json.load(f)
+            data.setdefault("enabled", True)
+            return data
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"enabled": True}
+
+
+def _save_state(state: dict) -> None:
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp, STATE_FILE)
+
+
+def is_enabled() -> bool:
+    with _lock:
+        return _load_state()["enabled"]
+
+
+def set_enabled(enabled: bool) -> dict:
+    with _lock:
+        state = _load_state()
+        state["enabled"] = bool(enabled)
+        _save_state(state)
+    activity_log.log("wireless-migration", f"Wireless migration {'enabled' if enabled else 'disabled'}")
+    return {"enabled": bool(enabled)}
 
 
 def _map_ip(primary_ip: str) -> str | None:
@@ -31,6 +78,9 @@ def check_and_migrate() -> list:
     """Runs one pass; returns [{mac, old_ip, new_ip, hostname}] for whatever
     got migrated this pass (mainly for tests/manual invocation — the
     background loop itself only cares about the activity_log entries)."""
+    if not is_enabled():
+        return []
+
     wireless = store.get_vlan(WIRELESS_VLAN_ID)
     if not wireless:
         return []
