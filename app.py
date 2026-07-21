@@ -13,7 +13,7 @@ from workers import (
     activity_log, auth, backup, credentials, dhcp_failover, external_dhcp,
     gravity, lease_conflicts, maintenance, monitor, netbox_import, nodes,
     notify, pihole_push, primary_dhcp, query_log, recovery, replication,
-    setup, stats, store, updater, wizard,
+    setup, stats, store, updater, wireless_migration, wizard,
 )
 
 PORT        = int(os.environ.get("PORT", "8080"))
@@ -792,4 +792,5 @@ if __name__ == "__main__":
     external_dhcp.start()
     monitor.start()
     backup.start()
+    wireless_migration.start()
     app.run(host="0.0.0.0", port=PORT)
