@@ -217,9 +217,9 @@ function renderVlans() {
       </div>
       <div class="vlan-body ${open ? 'open' : ''}" id="body-${v.id}">
         <div class="vlan-meta">
-          <div class="meta-item"><span class="meta-label">Range</span><span class="meta-value">${esc(v.range_start)} – ${esc(v.range_end)}</span></div>
+          <div class="meta-item"><span class="meta-label">Range</span><span class="meta-value" id="range-${v.id}" ${!isPrimary ? `onclick="startEditRange('${v.id}','${esc(v.range_start)}','${esc(v.range_end)}')" title="Click to edit" style="cursor:pointer"` : ''}>${esc(v.range_start)} – ${esc(v.range_end)}</span></div>
           <div class="meta-item"><span class="meta-label">Netmask</span><span class="meta-value">${esc(netmaskOf(v))}</span></div>
-          <div class="meta-item"><span class="meta-label">Lease</span><span class="meta-value">${esc(v.lease_time)}</span></div>
+          <div class="meta-item"><span class="meta-label">Lease</span><span class="meta-value" id="lease-${v.id}" ${!isPrimary ? `onclick="startEditLease('${v.id}','${esc(v.lease_time)}')" title="Click to edit" style="cursor:pointer"` : ''}>${esc(v.lease_time)}</span></div>
           ${!isPrimary ? `<div class="meta-item"><span class="meta-label">Cond. Forward</span><span class="meta-value" id="cf-${v.id}" onclick="startEditCf('${v.id}','${esc(v.cf_domain||'')}')" title="Click to edit" style="cursor:pointer">${esc(v.cf_domain) || '<span style=\'color:var(--muted)\'>none — click to set</span>'}</span></div>` : ''}
           ${!isPrimary ? `<div class="meta-item"><span class="meta-label">Pi-hole Group</span><span class="meta-value" id="grp-${v.id}" onclick="startEditGroup('${v.id}','${esc(v.group_name||'')}')" title="Click to edit" style="cursor:pointer">${esc(v.group_name) || '<span style=\'color:var(--muted)\'>none — click to set</span>'}</span></div>` : ''}
         </div>
@@ -380,6 +380,51 @@ async function saveGroup(vlanId) {
   const input = document.getElementById(`edit-grp-${vlanId}`);
   const errEl = document.getElementById(`edit-grp-err-${vlanId}`);
   const r = await fetch(`/api/vlans/${vlanId}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({group_name: input.value.trim()})});
+  const d = await r.json();
+  if (!d.ok) { errEl.textContent = d.error || 'Failed'; return; }
+  openVlan = vlanId;
+  await loadVlans();
+}
+
+function startEditRange(vlanId, start, end) {
+  const el = document.getElementById(`range-${vlanId}`);
+  if (!el) return;
+  el.innerHTML = `
+    <input class="edit-input" style="width:100px" id="edit-range-start-${vlanId}" value="${esc(start)}" placeholder="start">
+    –
+    <input class="edit-input" style="width:100px" id="edit-range-end-${vlanId}" value="${esc(end)}" placeholder="end">
+    <button class="edit-save" onclick="saveRange('${vlanId}')">✓</button>
+    <button class="edit-cancel" onclick="renderVlans()">✗</button>
+    <span class="edit-err" id="edit-range-err-${vlanId}"></span>`;
+  document.getElementById(`edit-range-start-${vlanId}`)?.focus();
+}
+
+async function saveRange(vlanId) {
+  const startInput = document.getElementById(`edit-range-start-${vlanId}`);
+  const endInput = document.getElementById(`edit-range-end-${vlanId}`);
+  const errEl = document.getElementById(`edit-range-err-${vlanId}`);
+  const r = await fetch(`/api/vlans/${vlanId}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({range_start: startInput.value.trim(), range_end: endInput.value.trim()})});
+  const d = await r.json();
+  if (!d.ok) { errEl.textContent = d.error || 'Failed'; return; }
+  openVlan = vlanId;
+  await loadVlans();
+}
+
+function startEditLease(vlanId, current) {
+  const el = document.getElementById(`lease-${vlanId}`);
+  if (!el) return;
+  el.innerHTML = `
+    <input class="edit-input" id="edit-lease-${vlanId}" value="${esc(current)}" placeholder="12h">
+    <button class="edit-save" onclick="saveLease('${vlanId}')">✓</button>
+    <button class="edit-cancel" onclick="renderVlans()">✗</button>
+    <span class="edit-err" id="edit-lease-err-${vlanId}"></span>`;
+  document.getElementById(`edit-lease-${vlanId}`)?.focus();
+}
+
+async function saveLease(vlanId) {
+  const input = document.getElementById(`edit-lease-${vlanId}`);
+  const errEl = document.getElementById(`edit-lease-err-${vlanId}`);
+  const r = await fetch(`/api/vlans/${vlanId}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({lease_time: input.value.trim()})});
   const d = await r.json();
   if (!d.ok) { errEl.textContent = d.error || 'Failed'; return; }
   openVlan = vlanId;

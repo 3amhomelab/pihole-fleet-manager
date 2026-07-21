@@ -266,6 +266,19 @@ def update_vlan(vlan_id: str, fields: dict) -> tuple:
         if "cf_domain" in fields and fields["cf_domain"] and not _DOMAIN_RE.match(fields["cf_domain"]):
             return None, f"Invalid conditional-forwarding domain: {fields['cf_domain']}"
 
+        net = network_of(vlan)
+        new_start = fields.get("range_start") or vlan.get("range_start")
+        new_end   = fields.get("range_end") or vlan.get("range_end")
+        for label, ip in (("range_start", new_start), ("range_end", new_end)):
+            if ("range_start" in fields or "range_end" in fields) and ip:
+                if not valid_ip(ip):
+                    return None, f"Invalid {label}: {ip}"
+                if ipaddress.IPv4Address(ip) not in net:
+                    return None, f"{label} {ip} is not inside {net}"
+        if ("range_start" in fields or "range_end" in fields) and new_start and new_end:
+            if ipaddress.IPv4Address(new_start) > ipaddress.IPv4Address(new_end):
+                return None, "range_start must come before range_end"
+
         changed = []
         for key in ("name", "vlan_tag", "gateway", "range_start", "range_end", "lease_time"):
             if key in fields and fields[key] not in (None, "") and fields[key] != vlan.get(key):
