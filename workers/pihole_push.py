@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from collections import deque
 from datetime import datetime
 
@@ -17,6 +18,7 @@ SSH_KEY      = os.environ.get("PIHOLE_SSH_KEY", "/root/.ssh/pihole_key")
 CONF_NAME    = os.environ.get("DNSMASQ_CONF_NAME", "10-vlans.conf")
 CONF_PATH    = f"/etc/dnsmasq.d/{CONF_NAME}"
 MANAGED_TAG  = "# managed by Pihole Fleet Manager — do not edit by hand"
+REBOOT_TIMEOUT_SECS = int(os.environ.get("PIHOLE_REBOOT_TIMEOUT_SECS", "180"))
 
 _SSH_OPTS = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no",
              "-o", "ConnectTimeout=15", "-o", "BatchMode=yes"]
@@ -198,16 +200,38 @@ def _ssh_write_file(ip: str, content: str) -> tuple:
 
 
 def _ssh_reload_dns(ip: str) -> tuple:
+    """Reloads DNS by rebooting the node outright (rather than a targeted
+    service restart) — the reboot itself drops the SSH session before it can
+    return cleanly, so that's expected, not a failure. Waits for the node to
+    come back up before returning, since this push's later per-node steps
+    (hostname sync, group assignment) need it reachable again."""
+    user = credentials.get_ssh_user()
     try:
-        proc = subprocess.run(
-            ["ssh", *_SSH_OPTS, f"{credentials.get_ssh_user()}@{ip}", "sudo pihole restartdns"],
-            capture_output=True, text=True, timeout=30,
+        subprocess.run(
+            ["ssh", *_SSH_OPTS, f"{user}@{ip}", "sudo reboot"],
+            capture_output=True, text=True, timeout=10,
         )
-        if proc.returncode != 0:
-            return False, proc.stderr.strip() or "restartdns failed"
-        return True, None
+    except subprocess.TimeoutExpired:
+        pass
     except Exception as e:
-        return False, str(e)
+        return False, f"failed to trigger reboot: {e}"
+
+    time.sleep(5)  # let it actually go down before polling, so an early poll doesn't just catch the pre-reboot host
+
+    deadline = time.monotonic() + REBOOT_TIMEOUT_SECS
+    while time.monotonic() < deadline:
+        try:
+            proc = subprocess.run(
+                ["ssh", *_SSH_OPTS, "-o", "ConnectTimeout=5", f"{user}@{ip}", "true"],
+                capture_output=True, text=True, timeout=8,
+            )
+            if proc.returncode == 0:
+                return True, None
+        except Exception:
+            pass
+        time.sleep(5)
+
+    return False, f"node did not come back up within {REBOOT_TIMEOUT_SECS}s of reboot"
 
 
 # --- Public: trigger + status (mirrors Network-Health's sync pattern) ---
